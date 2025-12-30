@@ -133,10 +133,15 @@ def playwright_worker():
                 params = task["params"]
                 dm_send_loop(page, params)
 
-            if task["type"] == "feed_comment":
-                ensure_browser()
-                params = task["params"]
-                feed_comment_loop(page, params)
+        if task["type"] == "feed_comment":
+            ensure_browser()
+            params = task["params"]
+            feed_comment_loop(page, params)
+
+        if task["type"] == "hashtag_comment":
+            ensure_browser()
+            params = task["params"]
+            hashtag_comment_loop(page, params)
 
         except Exception as e:
             result_queue.put(("ERROR", str(e)))
@@ -345,8 +350,9 @@ def extract_post_shortcode(href):
     return None
 
 
-def collect_visible_feed_posts(page, commented_ids):
+def collect_visible_feed_posts(page, commented_ids, extra_skip=None):
     posts = []
+    skip_set = commented_ids | (extra_skip or set())
     try:
         articles = page.locator("article").all()
     except Exception:
@@ -371,7 +377,7 @@ def collect_visible_feed_posts(page, commented_ids):
                 continue
 
             shortcode = extract_post_shortcode(href)
-            if not shortcode or shortcode in commented_ids:
+            if not shortcode or shortcode in skip_set:
                 continue
 
             posts.append((shortcode, href, a))
@@ -397,6 +403,62 @@ def close_post_overlay(page):
             page.wait_for_timeout(800)
     except Exception:
         pass
+
+
+def _containers_near_textarea(textarea):
+    containers = []
+    try:
+        form = textarea.locator("xpath=ancestor::form[1]").first
+        if form.count() > 0:
+            containers.append(form)
+    except Exception:
+        pass
+
+    try:
+        parent = textarea.locator("xpath=parent::*").first
+        if parent.count() > 0:
+            containers.append(parent)
+    except Exception:
+        pass
+
+    containers.append(textarea)
+
+    unique = []
+    for c in containers:
+        try:
+            if c and c.count() > 0 and c not in unique:
+                unique.append(c)
+        except Exception:
+            continue
+    return unique
+
+
+def submit_comment_from_textarea(page, root, textarea):
+    containers = _containers_near_textarea(textarea)
+
+    for container in containers:
+        try:
+            share_btn = container.locator(
+                "button[role='button']:has-text('Paylaş'), "
+                "div[role='button']:has-text('Paylaş'), "
+                "*[role='button'][aria-label='Paylaş']"
+            ).first
+            if share_btn.count() > 0 and share_btn.is_visible():
+                try:
+                    share_btn.click(timeout=5000, force=True)
+                except Exception:
+                    page.evaluate("(el) => el.click()", share_btn)
+                page.wait_for_timeout(1200)
+                return True
+        except Exception:
+            continue
+
+    try:
+        textarea.press("Enter")
+        page.wait_for_timeout(1200)
+        return True
+    except Exception:
+        return False
 
 
 def extract_all_comment_usernames(page, dialog):
@@ -678,12 +740,9 @@ def comment_single_post(page, href, anchor, comment_text):
         page.keyboard.insert_text(comment_text)
         page.wait_for_timeout(200)
 
-        share_btn = root.locator(
-            "button:has-text('Paylaş'), div[role='button']:has-text('Paylaş'), [role='button'][aria-label='Paylaş']"
-        ).first
-        share_btn.wait_for(timeout=15000)
-        share_btn.click(force=True)
-        page.wait_for_timeout(1200)
+        submitted = submit_comment_from_textarea(page, root, textarea)
+        if not submitted:
+            return False, "submit_failed"
 
         close_post_overlay(page)
         if re.search(r"/(p|reel)/", page.url):
@@ -767,6 +826,97 @@ def dm_send_loop(page, params):
         else:
             # son çarə
             page.keyboard.press("Enter")
+
+
+def hashtag_comment_loop(page, params):
+    hashtags = params["hashtags"]
+    comment_variants = params["comments"]
+    min_delay = params["min_delay"]
+    max_delay = params["max_delay"]
+    break_every = params["break_every"]
+    break_minutes = params["break_minutes"]
+
+    commented_ids = load_set(COMMENTED_POSTS_FILE)
+    commented_count = len(commented_ids)
+    made_comments = 0
+
+    result_queue.put(("LOG", "🗨 Hashtag komment prosesi başladı\n"))
+
+    for tag in hashtags:
+        if dm_stop_flag.is_set():
+            break
+
+        result_queue.put(("LOG", f"🏷 Hashtag: #{tag}\n"))
+        page.goto(
+            f"https://www.instagram.com/explore/tags/{tag}/",
+            timeout=90000,
+            wait_until="domcontentloaded",
+        )
+        page.wait_for_timeout(2500)
+
+        seen_shortcodes = set()
+        idle_rounds = 0
+
+        while not dm_stop_flag.is_set():
+            while dm_pause_flag.is_set() and not dm_stop_flag.is_set():
+                time.sleep(0.2)
+
+            posts = collect_visible_feed_posts(page, commented_ids, seen_shortcodes)
+
+            if not posts:
+                idle_rounds += 1
+                try:
+                    page.mouse.wheel(0, 1600)
+                except Exception:
+                    page.evaluate("() => window.scrollBy(0, window.innerHeight * 0.9)")
+                page.wait_for_timeout(1400)
+                if idle_rounds > 18:
+                    break
+                continue
+
+            idle_rounds = 0
+
+            for shortcode, href, anchor in posts:
+                seen_shortcodes.add(shortcode)
+
+                comment_text = random.choice(comment_variants)
+                ok, info = comment_single_post(page, href, anchor, comment_text)
+
+                if ok:
+                    commented_ids.add(shortcode)
+                    append_line(COMMENTED_POSTS_FILE, shortcode)
+                    made_comments += 1
+                    commented_count += 1
+                    result_queue.put(("LOG", f"✅ {shortcode} → yorum göndərildi\n"))
+                    result_queue.put(("COMMENT_PROGRESS", commented_count))
+                else:
+                    result_queue.put(("LOG", f"⚠️ {shortcode} keçildi: {info}\n"))
+
+                delay = random.randint(min_delay, max_delay)
+                result_queue.put(("LOG", f"⏳ Növbəti post üçün gözləmə: {delay}s\n"))
+                if not safe_wait(delay):
+                    return
+
+                if break_every > 0 and made_comments > 0 and made_comments % break_every == 0:
+                    result_queue.put(("LOG", f"🧠 Anti-spam fasilə: {break_minutes} dəq\n"))
+                    if not safe_wait(break_minutes * 60):
+                        return
+
+            try:
+                page.mouse.wheel(0, 1600)
+            except Exception:
+                page.evaluate("() => window.scrollBy(0, window.innerHeight * 0.9)")
+            page.wait_for_timeout(1400)
+
+        if dm_stop_flag.is_set():
+            break
+
+        extra_break = random.randint(120, 300)
+        result_queue.put(("LOG", f"⏳ Hashtag fasiləsi: {extra_break}s\n"))
+        if not safe_wait(extra_break):
+            return
+
+    result_queue.put(("LOG", "🛑 Hashtag komment prosesi bitdi\n"))
 
 
 def feed_comment_loop(page, params):
@@ -882,6 +1032,10 @@ ctk.CTkLabel(left, text="Feed komment mətni (sətir-sətir)").pack(anchor="w")
 comment_box = ctk.CTkTextbox(left, height=120)
 comment_box.pack(fill="x", pady=5)
 
+ctk.CTkLabel(left, text="Hashtaglər (1 sətir = 1 hashtag)").pack(anchor="w")
+hashtag_box = ctk.CTkTextbox(left, height=100)
+hashtag_box.pack(fill="x", pady=5)
+
 ctk.CTkLabel(left, text="User arası interval (saniyə)").pack(anchor="w")
 dm_min = ctk.CTkEntry(left)
 dm_min.insert(0, "15")
@@ -908,6 +1062,12 @@ btn_dm_start.pack(side="left", expand=True, fill="x", padx=(0, 4))
 
 btn_feed_comment = ctk.CTkButton(actions_row, text="🗨 Feed Comment Başlat")
 btn_feed_comment.pack(side="left", expand=True, fill="x", padx=(4, 0))
+
+hashtag_row = ctk.CTkFrame(left)
+hashtag_row.pack(fill="x", pady=(4, 6))
+
+btn_hashtag_comment = ctk.CTkButton(hashtag_row, text="🗨 Hashtag Comment Başlat")
+btn_hashtag_comment.pack(expand=True, fill="x")
 
 btn_pause = ctk.CTkButton(left, text="⏸ Pause", fg_color="#444444")
 btn_pause.pack(fill="x", pady=4)
@@ -1153,6 +1313,48 @@ def feed_comment_start():
     task_queue.put({"type": "feed_comment", "params": params})
 
 
+def hashtag_comment_start():
+    comments = [ln.strip() for ln in comment_box.get("1.0", "end").splitlines() if ln.strip()]
+    hashtags = [ln.strip().lstrip("#") for ln in hashtag_box.get("1.0", "end").splitlines() if ln.strip()]
+
+    if not comments:
+        gui_log("❌ Comment mətni boşdur\n")
+        return
+
+    if not hashtags:
+        gui_log("❌ Hashtag siyahısı boşdur\n")
+        return
+
+    try:
+        min_d = int(dm_min.get().strip())
+        max_d = int(dm_max.get().strip())
+        be = int(break_every.get().strip())
+        bm = int(break_minutes.get().strip())
+    except Exception:
+        gui_log("❌ Interval / fasilə dəyərləri səhvdir\n")
+        return
+
+    if min_d < 5 or max_d < min_d:
+        gui_log("❌ Interval düzgün deyil (min>=5, max>=min)\n")
+        return
+
+    dm_stop_flag.clear()
+    dm_pause_flag.clear()
+
+    gui_log("📌 Hashtag komment başlayır\n")
+    progress_lbl.configure(text="Comment Progress: ...")
+
+    params = {
+        "hashtags": hashtags,
+        "comments": comments,
+        "min_delay": min_d,
+        "max_delay": max_d,
+        "break_every": be,
+        "break_minutes": bm,
+    }
+    task_queue.put({"type": "hashtag_comment", "params": params})
+
+
 def dm_pause():
     dm_pause_flag.set()
     gui_log("⏸ Pause edildi\n")
@@ -1172,6 +1374,7 @@ def dm_stop():
 btn_preview.configure(command=preview_users)
 btn_dm_start.configure(command=dm_start)
 btn_feed_comment.configure(command=feed_comment_start)
+btn_hashtag_comment.configure(command=hashtag_comment_start)
 btn_pause.configure(command=dm_pause)
 btn_resume.configure(command=dm_resume)
 btn_stop.configure(command=dm_stop)
