@@ -18,6 +18,7 @@ SENT_FILE = os.path.join(DATA_DIR, "sent_users.txt")
 BLACKLIST_FILE = os.path.join(DATA_DIR, "blacklist.txt")
 SAVED_FILE = os.path.join(DATA_DIR, "users_saved.txt")
 PROGRESS_FILE = os.path.join(DATA_DIR, "dm_progress.json")
+COMMENTED_POSTS_FILE = os.path.join(DATA_DIR, "commented_posts.txt")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -131,6 +132,11 @@ def playwright_worker():
                 ensure_browser()
                 params = task["params"]
                 dm_send_loop(page, params)
+
+            if task["type"] == "feed_comment":
+                ensure_browser()
+                params = task["params"]
+                feed_comment_loop(page, params)
 
         except Exception as e:
             result_queue.put(("ERROR", str(e)))
@@ -328,6 +334,69 @@ def extract_usernames_internal(page, url):
             break
 
     return sorted(users)
+
+
+def extract_post_shortcode(href):
+    if not href:
+        return None
+    m = re.search(r"/(p|reel)/([A-Za-z0-9_-]+)/", href)
+    if m:
+        return m.group(2)
+    return None
+
+
+def collect_visible_feed_posts(page, commented_ids):
+    posts = []
+    try:
+        articles = page.locator("article").all()
+    except Exception:
+        articles = []
+
+    for art in articles:
+        try:
+            if art.locator("text=/Sponsorlu|Sponsored/i").count() > 0:
+                continue
+        except Exception:
+            pass
+
+        try:
+            anchors = art.locator("a[href*='/p/'], a[href*='/reel/']").all()
+        except Exception:
+            anchors = []
+
+        for a in anchors:
+            try:
+                href = a.get_attribute("href") or ""
+            except Exception:
+                continue
+
+            shortcode = extract_post_shortcode(href)
+            if not shortcode or shortcode in commented_ids:
+                continue
+
+            posts.append((shortcode, href, a))
+            break
+
+    return posts
+
+
+def post_comment_overlay(page):
+    dlg = page.locator("div[role='dialog']").first
+    if dlg.count() > 0:
+        return dlg
+    return page
+
+
+def close_post_overlay(page):
+    try:
+        close_btn = page.locator(
+            "[aria-label='Kapat'], button[aria-label='Kapat'], div[role='button'][aria-label='Kapat']"
+        ).first
+        if close_btn.count() > 0:
+            close_btn.click(force=True)
+            page.wait_for_timeout(800)
+    except Exception:
+        pass
 
 
 def extract_all_comment_usernames(page, dialog):
@@ -565,6 +634,75 @@ def send_dm_to_user(page, username, message_text):
         return False, str(e)
 
 
+def comment_single_post(page, href, anchor, comment_text):
+    if dm_stop_flag.is_set():
+        return False, "stop"
+
+    try:
+        try:
+            anchor.scroll_into_view_if_needed()
+        except Exception:
+            pass
+        try:
+            anchor.click(force=True)
+        except Exception:
+            page.goto(href, timeout=60000, wait_until="domcontentloaded")
+            page.wait_for_timeout(1500)
+
+        page.wait_for_timeout(1200)
+
+        root = post_comment_overlay(page)
+
+        try:
+            comment_icon = root.locator(
+                "svg[aria-label='Yorum Yap'], "
+                "svg[aria-label*='yorum' i], "
+                "svg[aria-label*='comment' i], "
+                "div[role='button']:has(svg[aria-label*='yorum' i])"
+            ).first
+            if comment_icon.count() > 0:
+                comment_icon.click(timeout=8000, force=True)
+                page.wait_for_timeout(600)
+        except Exception:
+            pass
+
+        textarea = root.locator(
+            "textarea[aria-label*='Yorum ekle' i], textarea[placeholder*='Yorum ekle' i]"
+        ).first
+        textarea.wait_for(timeout=15000)
+        textarea.click()
+        page.wait_for_timeout(150)
+
+        page.keyboard.press("Control+A")
+        page.keyboard.press("Backspace")
+        page.keyboard.insert_text(comment_text)
+        page.wait_for_timeout(200)
+
+        share_btn = root.locator(
+            "button:has-text('Paylaş'), div[role='button']:has-text('Paylaş'), [role='button'][aria-label='Paylaş']"
+        ).first
+        share_btn.wait_for(timeout=15000)
+        share_btn.click(force=True)
+        page.wait_for_timeout(1200)
+
+        close_post_overlay(page)
+        if re.search(r"/(p|reel)/", page.url):
+            page.goto("https://www.instagram.com/", timeout=60000, wait_until="domcontentloaded")
+            page.wait_for_timeout(1200)
+        return True, "ok"
+    except Exception as e:
+        close_post_overlay(page)
+        if re.search(r"/(p|reel)/", page.url):
+            try:
+                page.goto(
+                    "https://www.instagram.com/", timeout=60000, wait_until="domcontentloaded"
+                )
+                page.wait_for_timeout(1200)
+            except Exception:
+                pass
+        return False, str(e)
+
+
 def dm_send_loop(page, params):
     msg = params["msg"]
     min_delay = params["min_delay"]
@@ -631,6 +769,75 @@ def dm_send_loop(page, params):
             page.keyboard.press("Enter")
 
 
+def feed_comment_loop(page, params):
+    comment_variants = params["comments"]
+    min_delay = params["min_delay"]
+    max_delay = params["max_delay"]
+    break_every = params["break_every"]
+    break_minutes = params["break_minutes"]
+
+    commented_ids = load_set(COMMENTED_POSTS_FILE)
+    commented_count = len(commented_ids)
+    made_comments = 0
+
+    result_queue.put(("LOG", "🗨 Feed komment proses başladı\n"))
+
+    page.goto("https://www.instagram.com/", timeout=90000, wait_until="domcontentloaded")
+    page.wait_for_timeout(2500)
+
+    while not dm_stop_flag.is_set():
+        while dm_pause_flag.is_set() and not dm_stop_flag.is_set():
+            time.sleep(0.2)
+
+        posts = collect_visible_feed_posts(page, commented_ids)
+
+        if not posts:
+            try:
+                page.mouse.wheel(0, 1400)
+            except Exception:
+                page.evaluate("() => window.scrollBy(0, window.innerHeight * 0.9)")
+            page.wait_for_timeout(1600)
+            continue
+
+        for shortcode, href, anchor in posts:
+            if dm_stop_flag.is_set():
+                break
+
+            while dm_pause_flag.is_set() and not dm_stop_flag.is_set():
+                time.sleep(0.2)
+
+            comment_text = random.choice(comment_variants)
+            ok, info = comment_single_post(page, href, anchor, comment_text)
+
+            if ok:
+                commented_ids.add(shortcode)
+                append_line(COMMENTED_POSTS_FILE, shortcode)
+                made_comments += 1
+                commented_count += 1
+                result_queue.put(("LOG", f"✅ {shortcode} → yorum göndərildi\n"))
+                result_queue.put(("COMMENT_PROGRESS", commented_count))
+            else:
+                result_queue.put(("LOG", f"⚠️ {shortcode} keçildi: {info}\n"))
+
+            delay = random.randint(min_delay, max_delay)
+            result_queue.put(("LOG", f"⏳ Növbəti post üçün gözləmə: {delay}s\n"))
+            if not safe_wait(delay):
+                return
+
+            if break_every > 0 and made_comments > 0 and made_comments % break_every == 0:
+                result_queue.put(("LOG", f"🧠 Anti-spam fasilə: {break_minutes} dəq\n"))
+                if not safe_wait(break_minutes * 60):
+                    return
+
+        try:
+            page.mouse.wheel(0, 1600)
+        except Exception:
+            page.evaluate("() => window.scrollBy(0, window.innerHeight * 0.9)")
+        page.wait_for_timeout(1400)
+
+    result_queue.put(("LOG", "🛑 Feed komment prosesi dayandırıldı\n"))
+
+
 # ================== SHUTDOWN ==================
 def shutdown():
     global playwright, context
@@ -671,6 +878,10 @@ ctk.CTkLabel(left, text="DM Mesajı (1 mətn)").pack(anchor="w", pady=(10, 0))
 msg_box = ctk.CTkTextbox(left, height=100)
 msg_box.pack(fill="x", pady=5)
 
+ctk.CTkLabel(left, text="Feed komment mətni (sətir-sətir)").pack(anchor="w")
+comment_box = ctk.CTkTextbox(left, height=120)
+comment_box.pack(fill="x", pady=5)
+
 ctk.CTkLabel(left, text="User arası interval (saniyə)").pack(anchor="w")
 dm_min = ctk.CTkEntry(left)
 dm_min.insert(0, "15")
@@ -689,8 +900,14 @@ break_minutes = ctk.CTkEntry(left)
 break_minutes.insert(0, "30")
 break_minutes.pack(fill="x", pady=2)
 
-btn_dm_start = ctk.CTkButton(left, text="📨 DM Başlat")
-btn_dm_start.pack(fill="x", pady=(12, 6))
+actions_row = ctk.CTkFrame(left)
+actions_row.pack(fill="x", pady=(12, 6))
+
+btn_dm_start = ctk.CTkButton(actions_row, text="📨 DM Başlat")
+btn_dm_start.pack(side="left", expand=True, fill="x", padx=(0, 4))
+
+btn_feed_comment = ctk.CTkButton(actions_row, text="🗨 Feed Comment Başlat")
+btn_feed_comment.pack(side="left", expand=True, fill="x", padx=(4, 0))
 
 btn_pause = ctk.CTkButton(left, text="⏸ Pause", fg_color="#444444")
 btn_pause.pack(fill="x", pady=4)
@@ -835,6 +1052,10 @@ def poll_results():
             idx, total = payload
             progress_lbl.configure(text=f"DM Progress: {idx}/{total}")
 
+        elif kind == "COMMENT_PROGRESS":
+            count = payload[0]
+            progress_lbl.configure(text=f"Comment Progress: {count}")
+
         elif kind == "SENT_OK":
             username = payload[0]
 
@@ -897,6 +1118,41 @@ def dm_start():
     task_queue.put({"type": "dm_start", "params": params})
 
 
+def feed_comment_start():
+    comments = [ln.strip() for ln in comment_box.get("1.0", "end").splitlines() if ln.strip()]
+    if not comments:
+        gui_log("❌ Comment mətni boşdur\n")
+        return
+
+    try:
+        min_d = int(dm_min.get().strip())
+        max_d = int(dm_max.get().strip())
+        be = int(break_every.get().strip())
+        bm = int(break_minutes.get().strip())
+    except Exception:
+        gui_log("❌ Interval / fasilə dəyərləri səhvdir\n")
+        return
+
+    if min_d < 5 or max_d < min_d:
+        gui_log("❌ Interval düzgün deyil (min>=5, max>=min)\n")
+        return
+
+    dm_stop_flag.clear()
+    dm_pause_flag.clear()
+
+    gui_log("📌 Feed komment başlayır\n")
+    progress_lbl.configure(text="Comment Progress: ...")
+
+    params = {
+        "comments": comments,
+        "min_delay": min_d,
+        "max_delay": max_d,
+        "break_every": be,
+        "break_minutes": bm,
+    }
+    task_queue.put({"type": "feed_comment", "params": params})
+
+
 def dm_pause():
     dm_pause_flag.set()
     gui_log("⏸ Pause edildi\n")
@@ -915,6 +1171,7 @@ def dm_stop():
 
 btn_preview.configure(command=preview_users)
 btn_dm_start.configure(command=dm_start)
+btn_feed_comment.configure(command=feed_comment_start)
 btn_pause.configure(command=dm_pause)
 btn_resume.configure(command=dm_resume)
 btn_stop.configure(command=dm_stop)
