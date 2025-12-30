@@ -128,20 +128,20 @@ def playwright_worker():
                 users = extract_usernames_internal(page, url)
                 result_queue.put(("USERS", users))
 
-            if task["type"] == "dm_start":
+            elif task["type"] == "dm_start":
                 ensure_browser()
                 params = task["params"]
                 dm_send_loop(page, params)
 
-        if task["type"] == "feed_comment":
-            ensure_browser()
-            params = task["params"]
-            feed_comment_loop(page, params)
+            elif task["type"] == "feed_comment":
+                ensure_browser()
+                params = task["params"]
+                feed_comment_loop(page, params)
 
-        if task["type"] == "hashtag_comment":
-            ensure_browser()
-            params = task["params"]
-            hashtag_comment_loop(page, params)
+            elif task["type"] == "hashtag_comment":
+                ensure_browser()
+                params = task["params"]
+                hashtag_comment_loop(page, params)
 
         except Exception as e:
             result_queue.put(("ERROR", str(e)))
@@ -386,6 +386,30 @@ def collect_visible_feed_posts(page, commented_ids, extra_skip=None):
     return posts
 
 
+def collect_search_results_posts(page, commented_ids, extra_skip=None):
+    posts = []
+    skip_set = commented_ids | (extra_skip or set())
+
+    try:
+        anchors = page.locator("a[href*='/p/'], a[href*='/reel/']").all()
+    except Exception:
+        anchors = []
+
+    for a in anchors:
+        try:
+            href = a.get_attribute("href") or ""
+        except Exception:
+            continue
+
+        shortcode = extract_post_shortcode(href)
+        if not shortcode or shortcode in skip_set:
+            continue
+
+        posts.append((shortcode, href, a))
+
+    return posts
+
+
 def post_comment_overlay(page):
     dlg = page.locator("div[role='dialog']").first
     if dlg.count() > 0:
@@ -436,12 +460,24 @@ def _containers_near_textarea(textarea):
 def submit_comment_from_textarea(page, root, textarea):
     containers = _containers_near_textarea(textarea)
 
+    try:
+        textarea.press("Enter")
+        page.wait_for_timeout(1200)
+    except Exception:
+        pass
+    else:
+        try:
+            cleared = textarea.input_value().strip() == ""
+        except Exception:
+            cleared = False
+        if cleared:
+            return True
+
     for container in containers:
         try:
             share_btn = container.locator(
-                "button[role='button']:has-text('Paylaş'), "
-                "div[role='button']:has-text('Paylaş'), "
-                "*[role='button'][aria-label='Paylaş']"
+                "xpath=.//form//button[role='button'][normalize-space(text())='Paylaş'] | "
+                "xpath=.//form//div[@role='button' and normalize-space(text())='Paylaş']"
             ).first
             if share_btn.count() > 0 and share_btn.is_visible():
                 try:
@@ -453,12 +489,30 @@ def submit_comment_from_textarea(page, root, textarea):
         except Exception:
             continue
 
+    return False
+
+
+def detect_login_wall(page):
     try:
-        textarea.press("Enter")
-        page.wait_for_timeout(1200)
-        return True
+        login_inputs = page.locator("input[name='username'], input[name='password']")
+        login_btns = page.locator("text=/Log in|Giriş yap|Kaydol/i")
+        if login_inputs.count() > 0 or login_btns.count() > 0:
+            return True
     except Exception:
-        return False
+        pass
+    return False
+
+
+def normalize_hashtags(raw_list):
+    seen = set()
+    cleaned = []
+    for ln in raw_list:
+        tag = ln.strip().lstrip("#").strip().lower()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        cleaned.append(tag)
+    return cleaned
 
 
 def extract_all_comment_usernames(page, dialog):
@@ -829,7 +883,7 @@ def dm_send_loop(page, params):
 
 
 def hashtag_comment_loop(page, params):
-    hashtags = params["hashtags"]
+    hashtags = normalize_hashtags(params["hashtags"])
     comment_variants = params["comments"]
     min_delay = params["min_delay"]
     max_delay = params["max_delay"]
@@ -840,6 +894,10 @@ def hashtag_comment_loop(page, params):
     commented_count = len(commented_ids)
     made_comments = 0
 
+    if not hashtags:
+        result_queue.put(("ERROR", "Hashtag siyahısı boşdur"))
+        return
+
     result_queue.put(("LOG", "🗨 Hashtag komment prosesi başladı\n"))
 
     for tag in hashtags:
@@ -847,12 +905,20 @@ def hashtag_comment_loop(page, params):
             break
 
         result_queue.put(("LOG", f"🏷 Hashtag: #{tag}\n"))
-        page.goto(
-            f"https://www.instagram.com/explore/tags/{tag}/",
-            timeout=90000,
-            wait_until="domcontentloaded",
-        )
-        page.wait_for_timeout(2500)
+        try:
+            page.goto(
+                f"https://www.instagram.com/explore/search/keyword/?q=%23{tag}",
+                timeout=90000,
+                wait_until="domcontentloaded",
+            )
+            page.wait_for_timeout(2500)
+        except Exception as e:
+            result_queue.put(("ERROR", f"{tag}: naviqasiya alınmadı → {e}"))
+            continue
+
+        if detect_login_wall(page):
+            result_queue.put(("ERROR", "🔒 Login tələb olunur, proses dayandırıldı"))
+            break
 
         seen_shortcodes = set()
         idle_rounds = 0
@@ -861,7 +927,7 @@ def hashtag_comment_loop(page, params):
             while dm_pause_flag.is_set() and not dm_stop_flag.is_set():
                 time.sleep(0.2)
 
-            posts = collect_visible_feed_posts(page, commented_ids, seen_shortcodes)
+            posts = collect_search_results_posts(page, commented_ids, seen_shortcodes)
 
             if not posts:
                 idle_rounds += 1
@@ -1315,12 +1381,13 @@ def feed_comment_start():
 
 def hashtag_comment_start():
     comments = [ln.strip() for ln in comment_box.get("1.0", "end").splitlines() if ln.strip()]
-    hashtags = [ln.strip().lstrip("#") for ln in hashtag_box.get("1.0", "end").splitlines() if ln.strip()]
+    hashtags = [ln for ln in hashtag_box.get("1.0", "end").splitlines()]
 
     if not comments:
         gui_log("❌ Comment mətni boşdur\n")
         return
 
+    hashtags = normalize_hashtags(hashtags)
     if not hashtags:
         gui_log("❌ Hashtag siyahısı boşdur\n")
         return
