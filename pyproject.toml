@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "insta-bot"
+version = "0.1.0"
+description = "Instagram commenter extraction and messaging GUI using CustomTkinter and Playwright."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "AsadAsadov"}]
+dependencies = [
+  "customtkinter>=5.2.2",
+  "playwright>=1.43.0",
+]
+
+[project.scripts]
+insta-bot = "insta_bot.app:run"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
