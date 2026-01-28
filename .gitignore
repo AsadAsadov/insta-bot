@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+.env
+
+# Runtime data
+/data/*.txt
+/data/*.json
+
+# Playwright
+.ms-playwright/
+
+# OS
+.DS_Store
