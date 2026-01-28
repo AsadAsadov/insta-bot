@@ -1,41 +1,36 @@
 # insta-bot
 
-A CustomTkinter desktop application that helps collect Instagram commenters, send DMs, and post comments to feeds or hashtag searches using Playwright.
+A server-based Instagram automation service built with FastAPI. It exposes Instagram webhook endpoints and a simple admin panel for viewing received events.
 
 ## Features
-- Extract commenters from a post or reel.
-- Maintain a sent-users list and blacklist.
-- Send DMs with configurable delays and breaks.
-- Post comments on feed posts or hashtag search results.
+- Instagram Webhooks (GET verification + POST events)
+- Admin panel at `/admin`
+- Render-compatible structure (Uvicorn entrypoint at `app/main.py`)
 
 ## Requirements
 - Python 3.10+
-- Playwright browsers installed locally
 
 ## Setup
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python -m playwright install
 ```
 
-## Run
+## Run (local)
 ```bash
-insta-bot
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Alternatively:
+## Environment
+Set the webhook verification token used by Instagram during the GET verification step:
+
 ```bash
-python -m insta_bot.app
+export IG_WEBHOOK_VERIFY_TOKEN=your-verify-token
 ```
 
-## Data Files
-Runtime data is stored in the `data/` directory:
-- `sent_users.txt`
-- `blacklist.txt`
-- `users_saved.txt`
-- `dm_progress.json`
-- `commented_posts.txt`
-
-These files are created automatically when the app runs.
+## Endpoints
+- `GET /` — health check
+- `GET /webhooks/instagram` — Instagram webhook verification (expects `hub.mode`, `hub.verify_token`, `hub.challenge`)
+- `POST /webhooks/instagram` — receives webhook events (JSON)
+- `GET /admin` — admin panel showing recent webhook events

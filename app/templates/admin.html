@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Insta Bot Admin</title>
+    <style>
+      body {
+        font-family: "Segoe UI", sans-serif;
+        background: #0b0f14;
+        color: #e6edf3;
+        margin: 0;
+        padding: 32px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 24px;
+      }
+      .card {
+        background: #111827;
+        border: 1px solid #1f2937;
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      .timestamp {
+        color: #9ca3af;
+        font-size: 0.85rem;
+        margin-bottom: 8px;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: #0b1220;
+        padding: 12px;
+        border-radius: 8px;
+        border: 1px solid #1f2937;
+        margin: 0;
+      }
+      .empty {
+        color: #9ca3af;
+        border: 1px dashed #374151;
+        padding: 24px;
+        border-radius: 12px;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Instagram Webhook Events</h1>
+      <span>Total stored: {{ events | length }}</span>
+    </header>
+
+    {% if events %}
+      {% for event in events %}
+        <section class="card">
+          <div class="timestamp">Received at: {{ event.received_at }}</div>
+          <pre>{{ event.payload | tojson(indent=2) }}</pre>
+        </section>
+      {% endfor %}
+    {% else %}
+      <div class="empty">No webhook events received yet.</div>
+    {% endif %}
+  </body>
+</html>
