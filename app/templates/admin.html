@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Insta Bot Admin</title>
-    <link rel="stylesheet" href="/static/admin.css" />
+    <link rel="stylesheet" href="{{ url_for('static', path='admin.css') }}" />
   </head>
   <body>
     <div class="layout">
@@ -23,14 +23,19 @@
 
       <main class="main">
         <header class="topbar">
-          <div>
+          <div class="title-stack">
             <h1>Instagram Bot Admin</h1>
-            <div class="subtitle">Manage keywords, auto-replies, and recent conversations.</div>
+            <div class="subtitle">Monitor conversations, manage keywords, and review recent webhook events.</div>
           </div>
-          <form method="post" action="/admin/auto-reply" class="form-row">
-            <button class="button" type="submit" name="enabled" value="true">Enable Auto-reply</button>
-            <button class="button secondary" type="submit" name="enabled" value="false">Disable</button>
-          </form>
+          <div class="header-status">
+            <span class="status-pill {{ 'active' if auto_reply_enabled else 'inactive' }}">
+              Auto-reply {{ "Enabled" if auto_reply_enabled else "Disabled" }}
+            </span>
+            <form method="post" action="/admin/auto-reply" class="form-row">
+              <button class="button" type="submit" name="enabled" value="true">Enable</button>
+              <button class="button secondary" type="submit" name="enabled" value="false">Disable</button>
+            </form>
+          </div>
         </header>
 
         <div class="container">
@@ -63,25 +68,28 @@
 
           <section class="grid-two">
             <section id="keywords" class="card">
-              <h2>Keyword Management</h2>
+              <div class="section-header">
+                <h2>Keyword Management</h2>
+                <p>Add or pause keywords that trigger auto-replies.</p>
+              </div>
               <form method="post" action="/admin/keywords" class="form-row">
                 <input id="keyword" name="keyword" type="text" placeholder="Add a keyword (e.g. 3 otaqlı, kirayə)" />
                 <button class="button" type="submit">Add keyword</button>
               </form>
 
               {% if keywords %}
-                <ul class="keywords-list">
+                <div class="pill-grid">
                   {% for keyword in keywords %}
-                    <li class="keyword-item">
-                      <div class="keyword-meta">
-                        <strong>{{ keyword.keyword }}</strong>
+                    <div class="keyword-pill">
+                      <div class="pill-info">
+                        <span class="pill-text">{{ keyword.keyword }}</span>
                         <span class="badge {{ 'active' if keyword.is_active else 'paused' }}">
                           {{ "Active" if keyword.is_active else "Paused" }}
                         </span>
                       </div>
-                      <div class="inline-actions">
+                      <div class="pill-actions">
                         <form method="post" action="/admin/keywords/{{ keyword.id }}/toggle">
-                          <button class="button secondary" type="submit">
+                          <button class="button ghost" type="submit">
                             {{ "Disable" if keyword.is_active else "Enable" }}
                           </button>
                         </form>
@@ -89,16 +97,19 @@
                           <button class="button danger" type="submit">Delete</button>
                         </form>
                       </div>
-                    </li>
+                    </div>
                   {% endfor %}
-                </ul>
+                </div>
               {% else %}
                 <div class="empty">No keywords yet. Add a keyword to start auto-replies.</div>
               {% endif %}
             </section>
 
             <section id="logs" class="card">
-              <h2>Message Logs</h2>
+              <div class="section-header">
+                <h2>Message Logs</h2>
+                <p>Latest incoming and outgoing conversations.</p>
+              </div>
               {% if logs %}
                 <div class="table-wrapper">
                   <table class="table">
@@ -133,7 +144,10 @@
           </section>
 
           <section id="webhooks" class="card">
-            <h2>Webhook Events</h2>
+            <div class="section-header">
+              <h2>Webhook Events</h2>
+              <p>Expand each event to inspect the raw payload.</p>
+            </div>
             {% if logs %}
               <div class="details-list">
                 {% for log in logs %}

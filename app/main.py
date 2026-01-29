@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 
@@ -19,6 +20,7 @@ VERIFY_TOKEN = os.getenv("IG_WEBHOOK_VERIFY_TOKEN", "change-me")
 app = FastAPI(title="Insta Bot Web Service")
 
 TEMPLATES = Jinja2Templates(directory="app/templates")
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
 @app.on_event("startup")
