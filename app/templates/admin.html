@@ -18,12 +18,59 @@
         justify-content: space-between;
         margin-bottom: 24px;
       }
+      form {
+        margin: 0;
+      }
       .card {
         background: #111827;
         border: 1px solid #1f2937;
         border-radius: 12px;
         padding: 16px;
         margin-bottom: 16px;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+      }
+      .column {
+        flex: 1 1 320px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        background: #1f2937;
+        color: #d1d5db;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .button {
+        background: #2563eb;
+        border: none;
+        padding: 8px 12px;
+        border-radius: 8px;
+        color: #fff;
+        cursor: pointer;
+        font-size: 0.85rem;
+      }
+      .button.secondary {
+        background: #4b5563;
+      }
+      .button.danger {
+        background: #dc2626;
+      }
+      input[type="text"] {
+        background: #0b1220;
+        border: 1px solid #1f2937;
+        border-radius: 8px;
+        padding: 8px 12px;
+        color: #e6edf3;
+        width: 100%;
       }
       .timestamp {
         color: #9ca3af;
@@ -50,19 +97,71 @@
   </head>
   <body>
     <header>
-      <h1>Instagram Webhook Events</h1>
-      <span>Total stored: {{ events | length }}</span>
+      <h1>Instagram Bot Admin</h1>
+      <span class="badge">Auto-reply: {{ "Enabled" if auto_reply_enabled else "Disabled" }}</span>
     </header>
 
-    {% if events %}
-      {% for event in events %}
+    <section class="card">
+      <h2>Auto-reply Control</h2>
+      <form method="post" action="/admin/auto-reply">
+        <div class="actions">
+          <button class="button" type="submit" name="enabled" value="true">Enable</button>
+          <button class="button secondary" type="submit" name="enabled" value="false">Disable</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="row">
+      <div class="column">
         <section class="card">
-          <div class="timestamp">Received at: {{ event.received_at }}</div>
-          <pre>{{ event.payload | tojson(indent=2) }}</pre>
+          <h2>Keyword Management</h2>
+          <form method="post" action="/admin/keywords">
+            <label for="keyword">Add keyword</label>
+            <input id="keyword" name="keyword" type="text" placeholder="e.g. 3 otaqlı, kirayə" />
+            <div class="actions">
+              <button class="button" type="submit">Add keyword</button>
+            </div>
+          </form>
+          {% if keywords %}
+            <ul>
+              {% for keyword in keywords %}
+                <li>
+                  <strong>{{ keyword.keyword }}</strong>
+                  <span class="badge">{{ "Active" if keyword.is_active else "Paused" }}</span>
+                  <div class="actions">
+                    <form method="post" action="/admin/keywords/{{ keyword.id }}/toggle">
+                      <button class="button secondary" type="submit">
+                        {{ "Disable" if keyword.is_active else "Enable" }}
+                      </button>
+                    </form>
+                    <form method="post" action="/admin/keywords/{{ keyword.id }}/delete">
+                      <button class="button danger" type="submit">Delete</button>
+                    </form>
+                  </div>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="empty">No keywords yet.</div>
+          {% endif %}
         </section>
-      {% endfor %}
-    {% else %}
-      <div class="empty">No webhook events received yet.</div>
-    {% endif %}
+      </div>
+      <div class="column">
+        <section class="card">
+          <h2>Recent Message Logs</h2>
+          {% if logs %}
+            {% for log in logs %}
+              <section class="card">
+                <div class="timestamp">{{ log.created_at }}</div>
+                <div><strong>{{ log.event_type }}</strong> · {{ log.direction }}</div>
+                <pre>{{ log.text }}</pre>
+              </section>
+            {% endfor %}
+          {% else %}
+            <div class="empty">No logs yet.</div>
+          {% endif %}
+        </section>
+      </div>
+    </section>
   </body>
 </html>
