@@ -4,164 +4,153 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Insta Bot Admin</title>
-    <style>
-      body {
-        font-family: "Segoe UI", sans-serif;
-        background: #0b0f14;
-        color: #e6edf3;
-        margin: 0;
-        padding: 32px;
-      }
-      header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 24px;
-      }
-      form {
-        margin: 0;
-      }
-      .card {
-        background: #111827;
-        border: 1px solid #1f2937;
-        border-radius: 12px;
-        padding: 16px;
-        margin-bottom: 16px;
-      }
-      .row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 16px;
-      }
-      .column {
-        flex: 1 1 320px;
-      }
-      .badge {
-        display: inline-block;
-        padding: 4px 8px;
-        border-radius: 999px;
-        font-size: 0.75rem;
-        background: #1f2937;
-        color: #d1d5db;
-      }
-      .actions {
-        display: flex;
-        gap: 8px;
-        margin-top: 8px;
-      }
-      .button {
-        background: #2563eb;
-        border: none;
-        padding: 8px 12px;
-        border-radius: 8px;
-        color: #fff;
-        cursor: pointer;
-        font-size: 0.85rem;
-      }
-      .button.secondary {
-        background: #4b5563;
-      }
-      .button.danger {
-        background: #dc2626;
-      }
-      input[type="text"] {
-        background: #0b1220;
-        border: 1px solid #1f2937;
-        border-radius: 8px;
-        padding: 8px 12px;
-        color: #e6edf3;
-        width: 100%;
-      }
-      .timestamp {
-        color: #9ca3af;
-        font-size: 0.85rem;
-        margin-bottom: 8px;
-      }
-      pre {
-        white-space: pre-wrap;
-        word-break: break-word;
-        background: #0b1220;
-        padding: 12px;
-        border-radius: 8px;
-        border: 1px solid #1f2937;
-        margin: 0;
-      }
-      .empty {
-        color: #9ca3af;
-        border: 1px dashed #374151;
-        padding: 24px;
-        border-radius: 12px;
-        text-align: center;
-      }
-    </style>
+    <link rel="stylesheet" href="/static/admin.css" />
   </head>
   <body>
-    <header>
-      <h1>Instagram Bot Admin</h1>
-      <span class="badge">Auto-reply: {{ "Enabled" if auto_reply_enabled else "Disabled" }}</span>
-    </header>
-
-    <section class="card">
-      <h2>Auto-reply Control</h2>
-      <form method="post" action="/admin/auto-reply">
-        <div class="actions">
-          <button class="button" type="submit" name="enabled" value="true">Enable</button>
-          <button class="button secondary" type="submit" name="enabled" value="false">Disable</button>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="logo">InstaBot Admin</div>
+        <nav>
+          <a class="active" href="#dashboard">Dashboard</a>
+          <a href="#keywords">Keywords</a>
+          <a href="#logs">Message Logs</a>
+          <a href="#webhooks">Webhooks</a>
+        </nav>
+        <div class="status-chip">
+          Auto-reply: {{ "ON" if auto_reply_enabled else "OFF" }}
         </div>
-      </form>
-    </section>
+      </aside>
 
-    <section class="row">
-      <div class="column">
-        <section class="card">
-          <h2>Keyword Management</h2>
-          <form method="post" action="/admin/keywords">
-            <label for="keyword">Add keyword</label>
-            <input id="keyword" name="keyword" type="text" placeholder="e.g. 3 otaqlı, kirayə" />
-            <div class="actions">
-              <button class="button" type="submit">Add keyword</button>
-            </div>
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h1>Instagram Bot Admin</h1>
+            <div class="subtitle">Manage keywords, auto-replies, and recent conversations.</div>
+          </div>
+          <form method="post" action="/admin/auto-reply" class="form-row">
+            <button class="button" type="submit" name="enabled" value="true">Enable Auto-reply</button>
+            <button class="button secondary" type="submit" name="enabled" value="false">Disable</button>
           </form>
-          {% if keywords %}
-            <ul>
-              {% for keyword in keywords %}
-                <li>
-                  <strong>{{ keyword.keyword }}</strong>
-                  <span class="badge">{{ "Active" if keyword.is_active else "Paused" }}</span>
-                  <div class="actions">
-                    <form method="post" action="/admin/keywords/{{ keyword.id }}/toggle">
-                      <button class="button secondary" type="submit">
-                        {{ "Disable" if keyword.is_active else "Enable" }}
-                      </button>
-                    </form>
-                    <form method="post" action="/admin/keywords/{{ keyword.id }}/delete">
-                      <button class="button danger" type="submit">Delete</button>
-                    </form>
-                  </div>
-                </li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <div class="empty">No keywords yet.</div>
-          {% endif %}
-        </section>
-      </div>
-      <div class="column">
-        <section class="card">
-          <h2>Recent Message Logs</h2>
-          {% if logs %}
-            {% for log in logs %}
-              <section class="card">
-                <div class="timestamp">{{ log.created_at }}</div>
-                <div><strong>{{ log.event_type }}</strong> · {{ log.direction }}</div>
-                <pre>{{ log.text }}</pre>
-              </section>
-            {% endfor %}
-          {% else %}
-            <div class="empty">No logs yet.</div>
-          {% endif %}
-        </section>
-      </div>
-    </section>
+        </header>
+
+        <div class="container">
+          <section id="dashboard" class="card">
+            <h2>Dashboard Summary</h2>
+            {% if logs %}
+              {% set recent_user_ids = logs | map(attribute='user_id') | reject('equalto', None) | unique | list %}
+            {% else %}
+              {% set recent_user_ids = [] %}
+            {% endif %}
+            <div class="summary-grid">
+              <div class="summary-card">
+                <div class="label">Total users (recent)</div>
+                <div class="value">{{ recent_user_ids | length }}</div>
+              </div>
+              <div class="summary-card">
+                <div class="label">Total messages (latest 100)</div>
+                <div class="value">{{ logs | length }}</div>
+              </div>
+              <div class="summary-card">
+                <div class="label">Auto-reply status</div>
+                <div class="value">
+                  <span class="status-pill {{ 'active' if auto_reply_enabled else 'inactive' }}">
+                    {{ "Enabled" if auto_reply_enabled else "Disabled" }}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="grid-two">
+            <section id="keywords" class="card">
+              <h2>Keyword Management</h2>
+              <form method="post" action="/admin/keywords" class="form-row">
+                <input id="keyword" name="keyword" type="text" placeholder="Add a keyword (e.g. 3 otaqlı, kirayə)" />
+                <button class="button" type="submit">Add keyword</button>
+              </form>
+
+              {% if keywords %}
+                <ul class="keywords-list">
+                  {% for keyword in keywords %}
+                    <li class="keyword-item">
+                      <div class="keyword-meta">
+                        <strong>{{ keyword.keyword }}</strong>
+                        <span class="badge {{ 'active' if keyword.is_active else 'paused' }}">
+                          {{ "Active" if keyword.is_active else "Paused" }}
+                        </span>
+                      </div>
+                      <div class="inline-actions">
+                        <form method="post" action="/admin/keywords/{{ keyword.id }}/toggle">
+                          <button class="button secondary" type="submit">
+                            {{ "Disable" if keyword.is_active else "Enable" }}
+                          </button>
+                        </form>
+                        <form method="post" action="/admin/keywords/{{ keyword.id }}/delete">
+                          <button class="button danger" type="submit">Delete</button>
+                        </form>
+                      </div>
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <div class="empty">No keywords yet. Add a keyword to start auto-replies.</div>
+              {% endif %}
+            </section>
+
+            <section id="logs" class="card">
+              <h2>Message Logs</h2>
+              {% if logs %}
+                <div class="table-wrapper">
+                  <table class="table">
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Type</th>
+                        <th>Direction</th>
+                        <th>Message</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for log in logs %}
+                        <tr>
+                          <td class="logs-muted">{{ log.created_at }}</td>
+                          <td>{{ log.event_type }}</td>
+                          <td>
+                            <span class="direction-badge {{ log.direction }}">
+                              {{ log.direction | title }}
+                            </span>
+                          </td>
+                          <td>{{ log.text }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              {% else %}
+                <div class="empty">No message logs yet.</div>
+              {% endif %}
+            </section>
+          </section>
+
+          <section id="webhooks" class="card">
+            <h2>Webhook Events</h2>
+            {% if logs %}
+              <div class="details-list">
+                {% for log in logs %}
+                  <details>
+                    <summary>
+                      {{ log.created_at }} · {{ log.event_type }} · {{ log.direction | title }}
+                    </summary>
+                    <pre>{{ log.raw_payload | tojson(indent=2) }}</pre>
+                  </details>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="empty">Webhook payloads will appear here once events are received.</div>
+            {% endif %}
+          </section>
+        </div>
+      </main>
+    </div>
   </body>
 </html>
