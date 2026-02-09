@@ -4,9 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-os.environ["META_VERIFY_TOKEN"] = "test-token"
-os.environ["META_APP_SECRET"] = "test-secret"
-os.environ["REQUIRE_SIGNATURE"] = "false"
+os.environ["VERIFY_TOKEN"] = "test-token"
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -52,4 +50,4 @@ def test_webhook_post_acknowledges() -> None:
     }
     response = client.post("/webhook", json=payload)
     assert response.status_code == 200
-    assert response.json()["status"] == "received"
+    assert response.json() == {"ok": True}

@@ -18,6 +18,10 @@ services:
         sync: false
       - key: IG_PAGE_ACCESS_TOKEN
         sync: false
+      - key: PAGE_ACCESS_TOKEN
+        sync: false
+      - key: IG_BUSINESS_ACCOUNT_ID
+        sync: false
       - key: AUTO_REPLY
         sync: false
       - key: GRAPH_API_VERSION
