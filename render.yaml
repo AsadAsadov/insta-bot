@@ -4,15 +4,21 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --access-log
     envVars:
       - key: VERIFY_TOKEN
         sync: false
-      - key: META_ACCESS_TOKEN
-        sync: false
       - key: APP_SECRET
         sync: false
-      - key: IG_BUSINESS_ACCOUNT_ID
+      - key: ADMIN_USER
+        sync: false
+      - key: ADMIN_PASS
+        sync: false
+      - key: GRAPH_TOKEN
+        sync: false
+      - key: IG_PAGE_ACCESS_TOKEN
+        sync: false
+      - key: AUTO_REPLY
         sync: false
       - key: GRAPH_API_VERSION
         sync: false
