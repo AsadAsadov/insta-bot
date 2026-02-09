@@ -13,6 +13,8 @@ class EventStore:
     _events: Deque[dict[str, Any]] = field(init=False)
     _lock: Lock = field(default_factory=Lock)
     _last_payload: dict[str, Any] | None = None
+    _webhook_payloads: Deque[dict[str, Any]] = field(init=False)
+    _request_logs: Deque[dict[str, Any]] = field(init=False)
     _drafts: dict[str, str] = field(default_factory=dict)
     _threads: dict[str, dict[str, Any]] = field(default_factory=dict)
     _message_index: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -20,6 +22,8 @@ class EventStore:
 
     def __post_init__(self) -> None:
         self._events = deque(maxlen=self.maxlen)
+        self._webhook_payloads = deque(maxlen=20)
+        self._request_logs = deque(maxlen=20)
 
     def add_event(self, event: dict[str, Any]) -> None:
         with self._lock:
@@ -34,6 +38,24 @@ class EventStore:
         with self._lock:
             events = list(self._events)
         return events[-limit:]
+
+    def add_webhook_payload(self, payload: dict[str, Any]) -> None:
+        with self._lock:
+            self._webhook_payloads.append(payload)
+
+    def recent_webhook_payloads(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._lock:
+            payloads = list(self._webhook_payloads)
+        return payloads[-limit:]
+
+    def add_request_log(self, entry: dict[str, Any]) -> None:
+        with self._lock:
+            self._request_logs.append(entry)
+
+    def recent_request_logs(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._lock:
+            logs = list(self._request_logs)
+        return logs[-limit:]
 
     def list_threads(self) -> list[dict[str, Any]]:
         with self._lock:
