@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Thread · InstaBot{% endblock %}
+{% block content %}
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="mb-3">Threads</h5>
+                <input class="form-control search-input mb-3" id="threadSearch" placeholder="Search threads" />
+                <div class="list-group" id="threadList">
+                    {% for thread in threads %}
+                    <a
+                        href="/admin/thread/{{ thread.id }}"
+                        class="list-group-item list-group-item-action {% if active_thread == thread.id %}thread-active{% endif %}"
+                    >
+                        <div class="fw-semibold">{{ thread.id }}</div>
+                        <div class="text-muted small">{{ thread.last_message }}</div>
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+                    <div>
+                        <h5 class="mb-1">Thread {{ active_thread }}</h5>
+                        <p class="text-muted mb-0">Instagram DM conversation</p>
+                    </div>
+                    <a href="/admin/templates" class="btn btn-outline-primary btn-sm">Manage templates</a>
+                </div>
+                {% if latest_failed %}
+                <div class="alert alert-danger mt-3">
+                    Latest send failed: {{ latest_failed.error }}
+                </div>
+                {% endif %}
+                <div class="chat-window d-flex flex-column gap-2 mt-4">
+                    {% if events %}
+                        {% for event in events %}
+                        <div class="d-flex flex-column {% if event.event_type == 'message_out' %}align-items-end{% else %}align-items-start{% endif %}">
+                            <div class="message-bubble {% if event.event_type == 'message_out' %}message-out{% else %}message-in{% endif %}">
+                                <div>{{ event.text }}</div>
+                                <div class="text-muted small mt-1">{{ event.received_at }}</div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="text-muted">No messages yet.</div>
+                    {% endif %}
+                </div>
+                <hr class="my-4" />
+                <form method="post" action="/admin/message-reply" class="d-flex flex-column gap-3">
+                    <input type="hidden" name="thread_id" value="{{ active_thread }}" />
+                    <div>
+                        <label class="form-label">Quick reply</label>
+                        <select class="form-select" id="quickReply">
+                            <option value="">Select a template</option>
+                            {% for template in templates %}
+                            <option value="{{ template.reply_text }}">{{ template.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label">Message</label>
+                        <textarea class="form-control" name="text" id="replyText" rows="4" placeholder="Type your reply..."></textarea>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <small class="text-muted">Sending to {{ active_thread }}</small>
+                        <button class="btn btn-primary" type="submit">Send reply</button>
+                    </div>
+                </form>
+                <div class="mt-4">
+                    <h6>Recent outbox</h6>
+                    <ul class="list-group">
+                        {% for entry in outbox_entries %}
+                        <li class="list-group-item d-flex justify-content-between align-items-start">
+                            <div>
+                                <div class="fw-semibold">{{ entry.text }}</div>
+                                <div class="text-muted small">{{ entry.created_at }}</div>
+                            </div>
+                            <span class="badge bg-{% if entry.status == 'sent' %}success{% elif entry.status == 'failed' %}danger{% else %}secondary{% endif %}">
+                                {{ entry.status }}
+                            </span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+    const quickReply = document.getElementById('quickReply');
+    const replyText = document.getElementById('replyText');
+    if (quickReply && replyText) {
+        quickReply.addEventListener('change', (event) => {
+            const value = event.target.value;
+            if (value) {
+                replyText.value = value;
+                replyText.focus();
+            }
+        });
+    }
+
+    const threadSearch = document.getElementById('threadSearch');
+    const threadList = document.getElementById('threadList');
+    if (threadSearch && threadList) {
+        threadSearch.addEventListener('input', (event) => {
+            const term = event.target.value.toLowerCase();
+            const items = threadList.querySelectorAll('.list-group-item');
+            items.forEach((item) => {
+                const text = item.textContent.toLowerCase();
+                item.style.display = text.includes(term) ? '' : 'none';
+            });
+        });
+    }
+</script>
+{% endblock %}
