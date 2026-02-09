@@ -101,10 +101,8 @@ def set_comment_hidden(
     return response.json()
 
 
-@router.get("/webhook")
-def verify_webhook(
-    request: Request,
-) -> JSONResponse | PlainTextResponse:
+@router.get("/webhook", response_class=PlainTextResponse, response_model=None)
+def verify_webhook(request: Request):
     hub_mode = request.query_params.get("hub.mode")
     hub_verify_token = request.query_params.get("hub.verify_token")
     hub_challenge = request.query_params.get("hub.challenge")
@@ -158,46 +156,60 @@ async def _handle_webhook(
     verify_signature: bool,
     background_tasks: BackgroundTasks,
 ) -> JSONResponse:
-    raw_body = await request.body()
-    log_request(request, raw_body)
-    debug_mode = os.getenv(SKIP_SIGNATURE_ENV, "").lower() in {"1", "true", "yes"}
-    signature_header = request.headers.get("X-Hub-Signature-256")
-    if verify_signature and not debug_mode:
-        if not verify_signature_header(raw_body, signature_header):
-            logger.warning("invalid signature")
-            return JSONResponse(content={"ok": False}, status_code=403)
-    if debug_mode:
-        logger.info("SKIP_SIGNATURE_CHECK enabled; signature verification bypassed")
-    payload = parse_json_payload(raw_body)
-    logger.info("webhook payload=%s", payload)
-    event_store.set_last_payload(payload)
-    event_store.add_webhook_payload(
-        {
-            "received_at": datetime.now(timezone.utc).isoformat(),
-            "payload": payload,
-        }
-    )
-    background_tasks.add_task(process_and_log_payload, payload)
-    return JSONResponse(content={"ok": True}, status_code=200)
+    try:
+        raw_body = await request.body()
+        log_request(request, raw_body)
+        debug_mode = (
+            os.getenv(SKIP_SIGNATURE_ENV, "").lower() in {"1", "true", "yes"}
+        )
+        signature_header = request.headers.get("X-Hub-Signature-256")
+        if verify_signature and not debug_mode:
+            if not verify_signature_header(raw_body, signature_header):
+                logger.warning("invalid signature")
+                return JSONResponse(
+                    content={"ok": False, "error": "invalid_signature"},
+                    status_code=200,
+                )
+        if debug_mode:
+            logger.info(
+                "SKIP_SIGNATURE_CHECK enabled; signature verification bypassed"
+            )
+        payload = parse_json_payload(raw_body)
+        logger.info("webhook payload=%s", payload)
+        event_store.set_last_payload(payload)
+        event_store.add_webhook_payload(
+            {
+                "received_at": datetime.now(timezone.utc).isoformat(),
+                "payload": payload,
+            }
+        )
+        background_tasks.add_task(process_and_log_payload, payload)
+        return JSONResponse(content={"ok": True}, status_code=200)
+    except Exception:  # noqa: BLE001
+        logger.exception("Webhook processing failed")
+        return JSONResponse(
+            content={"ok": False, "error": "processing_failed"},
+            status_code=200,
+        )
 
 
 def process_and_log_payload(payload: dict[str, Any] | None) -> None:
-    log_payload_summary(payload)
-    if payload:
-        process_webhook_payload(payload)
+    try:
+        log_payload_summary(payload)
+        if payload:
+            process_webhook_payload(payload)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to process webhook payload")
 
 
 def log_request(request: Request, raw_body: bytes) -> None:
     client_ip = request.client.host if request.client else "unknown"
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        client_ip = forwarded_for.split(",")[0].strip() or client_ip
     headers = dict(request.headers)
-    header_subset = {
-        "content-type": headers.get("content-type"),
-        "user-agent": headers.get("user-agent"),
-        "x-hub-signature-256": headers.get("x-hub-signature-256"),
-        "x-hub-signature": headers.get("x-hub-signature"),
-    }
     body_text = raw_body.decode("utf-8", errors="replace")
-    preview = body_text[:300]
+    preview = body_text[:500]
     logger.info(
         "webhook request method=%s path=%s client_ip=%s body_length=%s",
         request.method,
@@ -205,7 +217,7 @@ def log_request(request: Request, raw_body: bytes) -> None:
         client_ip,
         len(raw_body),
     )
-    logger.info("webhook headers=%s", header_subset)
+    logger.info("webhook headers=%s", headers)
     logger.info("webhook body preview=%s", preview)
 
 

@@ -66,9 +66,15 @@ async def log_requests(request: Request, call_next) -> Response:
             header_subset,
         )
 
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/debug/health")
+def debug_health() -> dict[str, bool | str]:
+    return {"status": "ok", "webhook_get": True, "webhook_post": True}
 
 
 @app.get("/debug/routes")
