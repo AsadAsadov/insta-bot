@@ -5,7 +5,7 @@ import os
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, Form, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
@@ -33,7 +33,11 @@ def require_admin(
 ) -> None:
     stored = _get_admin_credentials()
     if not stored:
-        return
+        raise HTTPException(
+            status_code=401,
+            detail="Admin credentials not configured.",
+            headers={"WWW-Authenticate": "Basic"},
+        )
     if credentials is None:
         raise HTTPException(
             status_code=401,
@@ -64,105 +68,144 @@ def admin_panel() -> HTMLResponse:
     return HTMLResponse(render_admin_page())
 
 
-@router.get(
-    "/drafts/{thread_id}", response_class=JSONResponse
-)
+@router.get("/drafts/{thread_id}", response_class=JSONResponse)
 def get_draft(thread_id: str) -> JSONResponse:
     draft = event_store.get_draft(thread_id)
     return JSONResponse(content={"thread_id": thread_id, "draft": draft})
 
 
 @router.post(
-    "/drafts/{thread_id}", response_class=HTMLResponse
+    "/drafts/{thread_id}", response_class=JSONResponse, response_model=None
 )
-def save_draft(thread_id: str, draft: str = Form(...)) -> HTMLResponse:
+async def save_draft(thread_id: str, request: Request) -> JSONResponse:
+    payload = await _parse_json_payload(request)
+    draft = str(payload.get("draft") or "").strip()
     event_store.set_draft(thread_id, draft)
-    return HTMLResponse(render_admin_page(f"Draft saved for thread {thread_id}."))
+    return JSONResponse(
+        content={"ok": True, "message": f"Draft saved for thread {thread_id}."}
+    )
 
 
 @router.post(
-    "/send/{thread_id}", response_class=HTMLResponse
+    "/send/{thread_id}", response_class=JSONResponse, response_model=None
 )
-def send_draft(thread_id: str) -> HTMLResponse:
+async def send_draft(thread_id: str, request: Request) -> JSONResponse:
+    payload = await _parse_json_payload(request)
+    override = str(payload.get("draft") or "").strip()
+    if override:
+        event_store.set_draft(thread_id, override)
     draft = event_store.get_draft(thread_id)
     if not draft.strip():
-        return HTMLResponse(
-            render_admin_page("Draft is empty."), status_code=400
+        return JSONResponse(
+            content={"ok": False, "error": "Draft is empty."}, status_code=200
         )
     access_token = get_instagram_access_token()
     if not access_token:
-        return HTMLResponse(
-            render_admin_page("Access token not configured."),
-            status_code=400,
+        return JSONResponse(
+            content={
+                "ok": False,
+                "error": "Access token not configured. Stubbed send.",
+            },
+            status_code=200,
         )
     try:
         result = send_instagram_message(thread_id, draft)
     except Exception as exc:  # noqa: BLE001
-        return HTMLResponse(
-            render_admin_page(f"Send failed: {exc}"),
-            status_code=500,
+        return JSONResponse(
+            content={"ok": False, "error": f"Send failed: {exc}"},
+            status_code=200,
         )
     event_store.clear_draft(thread_id)
-    return HTMLResponse(render_admin_page(f"Draft sent: {result}"))
+    return JSONResponse(content={"ok": True, "result": result}, status_code=200)
 
 
-@router.post("/reply", response_class=HTMLResponse)
-def admin_reply(comment_id: str = Form(...), message: str = Form(...)) -> HTMLResponse:
+@router.post("/reply", response_class=JSONResponse, response_model=None)
+async def admin_reply(request: Request) -> JSONResponse:
+    payload = await _parse_json_payload(request)
+    comment_id = str(payload.get("comment_id") or "").strip()
+    message = str(payload.get("message") or "").strip()
     access_token = get_instagram_access_token()
+    if not comment_id or not message:
+        return JSONResponse(
+            content={"ok": False, "error": "comment_id and message required"},
+            status_code=200,
+        )
     if not access_token:
-        return HTMLResponse(
-            render_admin_page("Access token not configured."),
-            status_code=400,
+        return JSONResponse(
+            content={"ok": False, "error": "Access token not configured."},
+            status_code=200,
         )
     try:
         result = reply_to_comment(comment_id, message, access_token)
     except Exception as exc:  # noqa: BLE001
-        return HTMLResponse(
-            render_admin_page(f"Reply failed: {exc}"),
-            status_code=500,
+        return JSONResponse(
+            content={"ok": False, "error": f"Reply failed: {exc}"},
+            status_code=200,
         )
-    return HTMLResponse(render_admin_page(f"Reply sent: {result}"))
+    return JSONResponse(content={"ok": True, "result": result}, status_code=200)
 
 
-@router.post(
-    "/message-reply", response_class=HTMLResponse
-)
-def admin_message_reply(
-    thread_id: str = Form(...), message: str = Form(...)
-) -> HTMLResponse:
+@router.post("/message-reply", response_class=JSONResponse, response_model=None)
+async def admin_message_reply(request: Request) -> JSONResponse:
+    payload = await _parse_json_payload(request)
+    thread_id = str(payload.get("thread_id") or "").strip()
+    message = str(payload.get("message") or "").strip()
     access_token = get_instagram_access_token()
+    if not thread_id or not message:
+        return JSONResponse(
+            content={"ok": False, "error": "thread_id and message required"},
+            status_code=200,
+        )
     if not access_token:
-        return HTMLResponse(
-            render_admin_page("Access token not configured."),
-            status_code=400,
+        return JSONResponse(
+            content={"ok": False, "error": "Access token not configured."},
+            status_code=200,
         )
     try:
         result = send_instagram_message(thread_id, message)
     except Exception as exc:  # noqa: BLE001
-        return HTMLResponse(
-            render_admin_page(f"DM reply failed: {exc}"),
-            status_code=500,
+        return JSONResponse(
+            content={"ok": False, "error": f"DM reply failed: {exc}"},
+            status_code=200,
         )
-    return HTMLResponse(render_admin_page(f"DM reply sent: {result}"))
+    return JSONResponse(content={"ok": True, "result": result}, status_code=200)
 
 
-@router.post("/hide", response_class=HTMLResponse)
-def admin_hide(comment_id: str = Form(...), hide: str = Form(...)) -> HTMLResponse:
+@router.post("/hide", response_class=JSONResponse, response_model=None)
+async def admin_hide(request: Request) -> JSONResponse:
+    payload = await _parse_json_payload(request)
+    comment_id = str(payload.get("comment_id") or "").strip()
+    hide = str(payload.get("hide") or "").strip()
     access_token = get_instagram_access_token()
+    if not comment_id or hide == "":
+        return JSONResponse(
+            content={"ok": False, "error": "comment_id and hide required"},
+            status_code=200,
+        )
     if not access_token:
-        return HTMLResponse(
-            render_admin_page("Access token not configured."),
-            status_code=400,
+        return JSONResponse(
+            content={"ok": False, "error": "Access token not configured."},
+            status_code=200,
         )
     hide_bool = hide.lower() == "true"
     try:
         result = set_comment_hidden(comment_id, hide_bool, access_token)
     except Exception as exc:  # noqa: BLE001
-        return HTMLResponse(
-            render_admin_page(f"Hide/unhide failed: {exc}"),
-            status_code=500,
+        return JSONResponse(
+            content={"ok": False, "error": f"Hide/unhide failed: {exc}"},
+            status_code=200,
         )
-    return HTMLResponse(render_admin_page(f"Hide/unhide result: {result}"))
+    return JSONResponse(content={"ok": True, "result": result}, status_code=200)
+
+
+async def _parse_json_payload(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        return {}
+    if isinstance(payload, dict):
+        return payload
+    return {}
 
 
 def render_admin_page(message: str | None = None) -> str:
@@ -174,7 +217,7 @@ def render_admin_page(message: str | None = None) -> str:
     if not admin_credentials:
         admin_warning = (
             "<p><strong>ADMIN_USER/ADMIN_PASS not set.</strong> "
-            "Admin routes are unsecured until these env vars are configured.</p>"
+            "Admin routes are disabled until these env vars are configured.</p>"
         )
     events = event_store.recent(50)
     webhook_payloads = event_store.recent_webhook_payloads(20)
@@ -205,13 +248,60 @@ def render_admin_page(message: str | None = None) -> str:
       table {{ border-collapse: collapse; width: 100%; }}
       th, td {{ border: 1px solid #ddd; padding: 8px; }}
       th {{ background: #f4f4f4; text-align: left; }}
-      form {{ margin-bottom: 1.5rem; }}
       input, select, textarea {{ margin-right: 0.5rem; }}
       textarea {{ width: 100%; min-height: 70px; }}
       .thread-card {{ border: 1px solid #ddd; padding: 1rem; margin-bottom: 1rem; }}
       .thread-meta {{ font-size: 0.9rem; color: #555; }}
-      .actions form {{ display: inline-block; margin-right: 0.5rem; }}
+      .actions .action-row {{ display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }}
+      .actions input {{ flex: 1; }}
     </style>
+    <script>
+      async function postJson(url, payload) {{
+        const response = await fetch(url, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify(payload || {{}}),
+        }});
+        let data = {{}};
+        try {{
+          data = await response.json();
+        }} catch (err) {{
+          data = {{}};
+        }}
+        return {{ ok: response.ok, data }};
+      }}
+
+      async function saveDraft(threadId) {{
+        const draftEl = document.getElementById(`draft-${{threadId}}`);
+        const draft = draftEl ? draftEl.value : "";
+        const result = await postJson(`/admin/drafts/${{threadId}}`, {{ draft }});
+        alert(result.data.message || result.data.error || "Draft saved.");
+      }}
+
+      async function sendDraft(threadId) {{
+        const draftEl = document.getElementById(`draft-${{threadId}}`);
+        const draft = draftEl ? draftEl.value : "";
+        const result = await postJson(`/admin/send/${{threadId}}`, {{ draft }});
+        alert(result.data.result ? "Draft sent." : result.data.error || "Send complete.");
+        if (result.data.result) {{
+          window.location.reload();
+        }}
+      }}
+
+      async function replyToComment(commentId, inputId) {{
+        const messageEl = document.getElementById(inputId);
+        const message = messageEl ? messageEl.value : "";
+        const result = await postJson("/admin/reply", {{ comment_id: commentId, message }});
+        alert(result.data.result ? "Reply sent." : result.data.error || "Reply complete.");
+      }}
+
+      async function replyToThread(threadId, inputId) {{
+        const messageEl = document.getElementById(inputId);
+        const message = messageEl ? messageEl.value : "";
+        const result = await postJson("/admin/message-reply", {{ thread_id: threadId, message }});
+        alert(result.data.result ? "DM sent." : result.data.error || "Send complete.");
+      }}
+    </script>
   </head>
   <body>
     <h1>Webhook Admin</h1>
@@ -306,14 +396,10 @@ def _render_thread_row(thread: dict[str, Any], draft: str) -> str:
         <strong>Last type:</strong> {last_event_type}
       </div>
       <p><strong>Last message:</strong> {last_preview}</p>
-      <form method="post" action="/admin/drafts/{thread_id}">
-        <label><strong>Draft</strong></label>
-        <textarea name="draft">{draft}</textarea>
-        <button type="submit">Save draft</button>
-      </form>
-      <form method="post" action="/admin/send/{thread_id}">
-        <button type="submit">Send draft</button>
-      </form>
+      <label><strong>Draft</strong></label>
+      <textarea id="draft-{thread_id}">{draft}</textarea>
+      <button type="button" onclick="saveDraft('{thread_id}')">Save draft</button>
+      <button type="button" onclick="sendDraft('{thread_id}')">Send draft</button>
     </div>
     """
 
@@ -325,20 +411,20 @@ def _render_event_row(event: dict[str, Any]) -> str:
     comment_id = event.get("comment_id") or ""
     action_html = ""
     if event_type == "comment" and comment_id:
+        input_id = f"comment-reply-{comment_id}"
         action_html = f"""
-        <form method="post" action="/admin/reply">
-          <input type="hidden" name="comment_id" value="{comment_id}" />
-          <input type="text" name="message" placeholder="Reply" required />
-          <button type="submit">Reply</button>
-        </form>
+        <div class="action-row">
+          <input type="text" id="{input_id}" placeholder="Reply" />
+          <button type="button" onclick="replyToComment('{comment_id}', '{input_id}')">Reply</button>
+        </div>
         """
     elif event_type == "message" and thread_id:
+        input_id = f"thread-reply-{thread_id}"
         action_html = f"""
-        <form method="post" action="/admin/message-reply">
-          <input type="hidden" name="thread_id" value="{thread_id}" />
-          <input type="text" name="message" placeholder="DM reply" required />
-          <button type="submit">Send DM</button>
-        </form>
+        <div class="action-row">
+          <input type="text" id="{input_id}" placeholder="DM reply" />
+          <button type="button" onclick="replyToThread('{thread_id}', '{input_id}')">Send DM</button>
+        </div>
         """
     return (
         "<tr>"

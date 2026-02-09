@@ -106,6 +106,8 @@ def verify_webhook(request: Request):
     hub_verify_token = request.query_params.get("hub.verify_token")
     hub_challenge = request.query_params.get("hub.challenge")
     verify_token = os.getenv(VERIFY_TOKEN_ENV)
+    if not (hub_mode and hub_verify_token and hub_challenge):
+        return PlainTextResponse(content="Forbidden", status_code=403)
     if (
         hub_mode == "subscribe"
         and verify_token
@@ -153,6 +155,11 @@ async def _handle_webhook(
     try:
         raw_body = await request.body()
         log_request(request, raw_body)
+        meta_hit = bool(
+            request.headers.get("x-hub-signature-256")
+            or request.headers.get("x-hub-signature")
+        )
+        logger.info("META_WEBHOOK_HIT=%s", meta_hit)
         debug_mode = (
             os.getenv(SKIP_SIGNATURE_ENV, "").lower() in {"1", "true", "yes"}
         )
@@ -171,7 +178,12 @@ async def _handle_webhook(
                 "SKIP_SIGNATURE_CHECK enabled; signature verification bypassed"
             )
         payload = await parse_json_payload(request)
-        logger.info("webhook payload=%s", payload)
+        entry_count = _count_entries(payload)
+        logger.info(
+            "webhook payload=%s entry_count=%s",
+            payload,
+            entry_count,
+        )
         event_store.set_last_payload(payload)
         event_store.add_webhook_payload(
             {
@@ -252,15 +264,21 @@ def log_payload_summary(payload: dict[str, Any] | None) -> None:
     if not payload:
         logger.info("Webhook payload summary: empty")
         return
-    entry_count = 0
-    entry = payload.get("entry")
-    if isinstance(entry, list):
-        entry_count = len(entry)
+    entry_count = _count_entries(payload)
     logger.info(
         "Webhook payload summary: object=%s entry_count=%s",
         payload.get("object"),
         entry_count,
     )
+
+
+def _count_entries(payload: dict[str, Any] | None) -> int:
+    if not payload:
+        return 0
+    entry = payload.get("entry")
+    if isinstance(entry, list):
+        return len(entry)
+    return 0
 
 
 def process_webhook_payload(payload: dict[str, Any]) -> None:
