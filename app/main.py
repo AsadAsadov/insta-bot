@@ -8,7 +8,16 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, Response
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+)
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -24,9 +33,12 @@ DEFAULT_DM_TEMPLATE = (
 )
 DEFAULT_COMMENT_TEMPLATE = "Salam, ətraflı məlumat üçün DM yazın."
 
-VERIFY_TOKEN_ENV = "META_VERIFY_TOKEN"
-APP_SECRET_ENV = "META_APP_SECRET"
-REQUIRE_SIGNATURE_ENV = "REQUIRE_SIGNATURE"
+VERIFY_TOKEN_ENV = "VERIFY_TOKEN"
+APP_SECRET_ENV = "APP_SECRET"
+ADMIN_USER_ENV = "ADMIN_USER"
+ADMIN_PASS_ENV = "ADMIN_PASS"
+
+security = HTTPBasic()
 
 
 class DraftUpdate(BaseModel):
@@ -35,14 +47,53 @@ class DraftUpdate(BaseModel):
 app = FastAPI(title="Instagram Messaging Webhook")
 
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):  # type: ignore[no-untyped-def]
+    response = await call_next(request)
+    logger.info(
+        "request method=%s path=%s query=%s status=%s",
+        request.method,
+        request.url.path,
+        request.url.query,
+        response.status_code,
+    )
+    return response
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_db()
 
 
-@app.get("/health")
-def healthcheck() -> dict[str, bool]:
-    return {"ok": True}
+def require_admin(
+    credentials: HTTPBasicCredentials = Depends(security),
+) -> None:
+    admin_user = os.getenv(ADMIN_USER_ENV)
+    admin_pass = os.getenv(ADMIN_PASS_ENV)
+    if not admin_user or not admin_pass:
+        return
+    if credentials.username != admin_user or credentials.password != admin_pass:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+@app.get("/")
+def root() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.head("/")
+def root_head() -> Response:
+    return Response(status_code=200)
+
+
+@app.get("/admin", dependencies=[Depends(require_admin)])
+def admin_panel() -> dict[str, str]:
+    return {"status": "admin ok"}
+
+
+@app.head("/admin", dependencies=[Depends(require_admin)])
+def admin_panel_head() -> Response:
+    return Response(status_code=200)
 
 
 @app.get("/webhook")
@@ -72,12 +123,17 @@ async def receive_instagram_webhook(
     request: Request, background_tasks: BackgroundTasks
 ) -> JSONResponse:
     raw_body = await request.body()
-    verify_signature(raw_body, request.headers.get("X-Hub-Signature-256"))
+    payload = parse_json_payload(raw_body)
+    if payload is not None:
+        logger.info("Webhook payload:\n%s", json.dumps(payload, indent=2, sort_keys=True))
+    verify_signature(
+        raw_body, request.headers.get("X-Hub-Signature-256"), payload=payload
+    )
     background_tasks.add_task(process_webhook_payload, raw_body)
-    return JSONResponse(content={"status": "received"})
+    return JSONResponse(content={"success": True})
 
 
-@app.get("/admin/drafts/{thread_id}")
+@app.get("/admin/drafts/{thread_id}", dependencies=[Depends(require_admin)])
 def get_draft(thread_id: str) -> dict[str, Any]:
     with get_session() as session:
         draft = session.query(Draft).filter(Draft.thread_id == thread_id).one_or_none()
@@ -94,7 +150,7 @@ def get_draft(thread_id: str) -> dict[str, Any]:
     }
 
 
-@app.post("/admin/drafts/{thread_id}")
+@app.post("/admin/drafts/{thread_id}", dependencies=[Depends(require_admin)])
 def update_draft(thread_id: str, payload: DraftUpdate) -> dict[str, Any]:
     with get_session() as session:
         draft = session.query(Draft).filter(Draft.thread_id == thread_id).one_or_none()
@@ -111,7 +167,7 @@ def update_draft(thread_id: str, payload: DraftUpdate) -> dict[str, Any]:
         }
 
 
-@app.post("/admin/send/{thread_id}")
+@app.post("/admin/send/{thread_id}", dependencies=[Depends(require_admin)])
 def send_draft(thread_id: str) -> dict[str, Any]:
     with get_session() as session:
         draft = session.query(Draft).filter(Draft.thread_id == thread_id).one_or_none()
@@ -127,22 +183,49 @@ def send_draft(thread_id: str) -> dict[str, Any]:
     return {"thread_id": thread_id, "sent": True, "response": response}
 
 
-def verify_signature(raw_body: bytes, signature_header: str | None) -> None:
-    require_signature = os.getenv(REQUIRE_SIGNATURE_ENV, "false").lower() == "true"
+def verify_signature(
+    raw_body: bytes, signature_header: str | None, payload: dict[str, Any] | None
+) -> None:
     app_secret = os.getenv(APP_SECRET_ENV)
-    if not signature_header:
-        if require_signature:
-            raise HTTPException(status_code=403, detail="Missing signature")
-        logger.warning("Missing X-Hub-Signature-256 header")
+    if not signature_header or not app_secret:
+        if not signature_header:
+            logger.info("No X-Hub-Signature-256 header present")
+        if not app_secret:
+            logger.info("APP_SECRET not configured; skipping signature check")
         return
-    if not app_secret:
-        raise HTTPException(status_code=500, detail="META_APP_SECRET is not configured")
     if not signature_header.startswith("sha256="):
         raise HTTPException(status_code=403, detail="Invalid signature format")
     provided = signature_header.split("sha256=", 1)[1]
-    digest = hmac.new(app_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(provided, digest):
+    expected = hmac_sha256(app_secret, raw_body)
+    if not hmac.compare_digest(provided, expected):
+        logger.warning(
+            "Signature mismatch for payload: %s",
+            json.dumps(payload, indent=2, sort_keys=True) if payload else "<empty>",
+        )
         raise HTTPException(status_code=403, detail="Invalid signature")
+
+
+def hmac_sha256(secret: str, raw_body: bytes) -> str:
+    return hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+
+
+def parse_json_payload(raw_body: bytes) -> dict[str, Any] | None:
+    if not raw_body:
+        return None
+    try:
+        return json.loads(raw_body.decode("utf-8"))
+    except json.JSONDecodeError:
+        logger.exception("Failed to decode webhook payload")
+        return None
+
+
+@app.get("/debug/routes")
+def debug_routes() -> list[dict[str, Any]]:
+    routes: list[dict[str, Any]] = []
+    for route in app.routes:
+        methods = sorted(route.methods or [])
+        routes.append({"path": route.path, "methods": methods, "name": route.name})
+    return routes
 
 
 def process_webhook_payload(raw_body: bytes) -> None:
