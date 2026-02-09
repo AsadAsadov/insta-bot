@@ -16,6 +16,7 @@ class EventStore:
     _drafts: dict[str, str] = field(default_factory=dict)
     _threads: dict[str, dict[str, Any]] = field(default_factory=dict)
     _message_index: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _comment_index: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._events = deque(maxlen=self.maxlen)
@@ -70,6 +71,14 @@ class EventStore:
     def get_message(self, message_id: str) -> dict[str, Any] | None:
         with self._lock:
             return self._message_index.get(message_id)
+
+    def register_comment(self, comment_id: str, event: dict[str, Any]) -> None:
+        with self._lock:
+            self._comment_index[comment_id] = event
+
+    def get_comment(self, comment_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            return self._comment_index.get(comment_id)
 
     def _build_thread_summary(
         self, thread_id: str, event: dict[str, Any]

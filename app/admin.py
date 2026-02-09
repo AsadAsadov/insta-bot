@@ -4,20 +4,22 @@ import os
 import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app.state import event_store
 from app.webhook import (
-    get_access_token,
+    get_instagram_access_token,
     reply_to_comment,
-    send_dm_reply,
+    send_instagram_message,
     set_comment_hidden,
 )
 
-router = APIRouter(prefix="/admin", tags=["admin"])
 security = HTTPBasic()
+
+DEFAULT_ADMIN_USER = "admin"
+DEFAULT_ADMIN_PASS = "admin"
 
 
 def require_admin(
@@ -25,12 +27,17 @@ def require_admin(
 ) -> None:
     admin_user = os.getenv("ADMIN_USER")
     admin_pass = os.getenv("ADMIN_PASS")
+    app_env = os.getenv("APP_ENV")
     if not admin_user or not admin_pass:
-        raise HTTPException(
-            status_code=401,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": "Basic"},
-        )
+        if app_env == "development":
+            admin_user = DEFAULT_ADMIN_USER
+            admin_pass = DEFAULT_ADMIN_PASS
+        else:
+            raise HTTPException(
+                status_code=401,
+                detail="Unauthorized",
+                headers={"WWW-Authenticate": "Basic"},
+            )
     if not (
         secrets.compare_digest(credentials.username, admin_user)
         and secrets.compare_digest(credentials.password, admin_pass)
@@ -42,15 +49,20 @@ def require_admin(
         )
 
 
-@router.get("", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
-def admin_panel(request: Request) -> HTMLResponse:
+router = APIRouter(
+    prefix="/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_admin)],
+)
+
+
+@router.get("", response_class=HTMLResponse)
+def admin_panel() -> HTMLResponse:
     return HTMLResponse(render_admin_page())
 
 
 @router.get(
-    "/drafts/{thread_id}",
-    response_class=JSONResponse,
-    dependencies=[Depends(require_admin)],
+    "/drafts/{thread_id}", response_class=JSONResponse
 )
 def get_draft(thread_id: str) -> JSONResponse:
     draft = event_store.get_draft(thread_id)
@@ -58,9 +70,7 @@ def get_draft(thread_id: str) -> JSONResponse:
 
 
 @router.post(
-    "/drafts/{thread_id}",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_admin)],
+    "/drafts/{thread_id}", response_class=HTMLResponse
 )
 def save_draft(thread_id: str, draft: str = Form(...)) -> HTMLResponse:
     event_store.set_draft(thread_id, draft)
@@ -68,9 +78,7 @@ def save_draft(thread_id: str, draft: str = Form(...)) -> HTMLResponse:
 
 
 @router.post(
-    "/send/{thread_id}",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_admin)],
+    "/send/{thread_id}", response_class=HTMLResponse
 )
 def send_draft(thread_id: str) -> HTMLResponse:
     draft = event_store.get_draft(thread_id)
@@ -78,14 +86,14 @@ def send_draft(thread_id: str) -> HTMLResponse:
         return HTMLResponse(
             render_admin_page("Draft is empty."), status_code=400
         )
-    access_token = get_access_token()
+    access_token = get_instagram_access_token()
     if not access_token:
         return HTMLResponse(
             render_admin_page("Access token not configured."),
             status_code=400,
         )
     try:
-        result = send_dm_reply(thread_id, draft, access_token)
+        result = send_instagram_message(thread_id, draft)
     except Exception as exc:  # noqa: BLE001
         return HTMLResponse(
             render_admin_page(f"Send failed: {exc}"),
@@ -95,13 +103,9 @@ def send_draft(thread_id: str) -> HTMLResponse:
     return HTMLResponse(render_admin_page(f"Draft sent: {result}"))
 
 
-@router.post(
-    "/reply", response_class=HTMLResponse, dependencies=[Depends(require_admin)]
-)
-def admin_reply(
-    request: Request, comment_id: str = Form(...), message: str = Form(...)
-) -> HTMLResponse:
-    access_token = get_access_token()
+@router.post("/reply", response_class=HTMLResponse)
+def admin_reply(comment_id: str = Form(...), message: str = Form(...)) -> HTMLResponse:
+    access_token = get_instagram_access_token()
     if not access_token:
         return HTMLResponse(
             render_admin_page("Access token not configured."),
@@ -118,21 +122,19 @@ def admin_reply(
 
 
 @router.post(
-    "/message-reply",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_admin)],
+    "/message-reply", response_class=HTMLResponse
 )
 def admin_message_reply(
     thread_id: str = Form(...), message: str = Form(...)
 ) -> HTMLResponse:
-    access_token = get_access_token()
+    access_token = get_instagram_access_token()
     if not access_token:
         return HTMLResponse(
             render_admin_page("Access token not configured."),
             status_code=400,
         )
     try:
-        result = send_dm_reply(thread_id, message, access_token)
+        result = send_instagram_message(thread_id, message)
     except Exception as exc:  # noqa: BLE001
         return HTMLResponse(
             render_admin_page(f"DM reply failed: {exc}"),
@@ -141,13 +143,9 @@ def admin_message_reply(
     return HTMLResponse(render_admin_page(f"DM reply sent: {result}"))
 
 
-@router.post(
-    "/hide", response_class=HTMLResponse, dependencies=[Depends(require_admin)]
-)
-def admin_hide(
-    request: Request, comment_id: str = Form(...), hide: str = Form(...)
-) -> HTMLResponse:
-    access_token = get_access_token()
+@router.post("/hide", response_class=HTMLResponse)
+def admin_hide(comment_id: str = Form(...), hide: str = Form(...)) -> HTMLResponse:
+    access_token = get_instagram_access_token()
     if not access_token:
         return HTMLResponse(
             render_admin_page("Access token not configured."),
@@ -165,7 +163,7 @@ def admin_hide(
 
 
 def render_admin_page(message: str | None = None) -> str:
-    verify_token_set = "yes" if os.getenv("VERIFY_TOKEN") else "no"
+    verify_token_set = "yes" if os.getenv("META_VERIFY_TOKEN") else "no"
     events = event_store.recent(50)
     threads = event_store.list_threads()
     thread_rows = "\n".join(
@@ -197,7 +195,7 @@ def render_admin_page(message: str | None = None) -> str:
   </head>
   <body>
     <h1>Webhook Admin</h1>
-    <p>VERIFY_TOKEN set: <strong>{verify_token_set}</strong></p>
+    <p>META_VERIFY_TOKEN set: <strong>{verify_token_set}</strong></p>
     {message_html}
     <section>
       <h2>Threads</h2>
