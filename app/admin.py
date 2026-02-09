@@ -17,28 +17,30 @@ from app.webhook import (
     set_comment_hidden,
 )
 
-security = HTTPBasic()
+security = HTTPBasic(auto_error=False)
 
-DEFAULT_ADMIN_USER = "admin"
-DEFAULT_ADMIN_PASS = "admin"
+
+def _get_admin_credentials() -> tuple[str, str] | None:
+    admin_user = os.getenv("ADMIN_USER")
+    admin_pass = os.getenv("ADMIN_PASS")
+    if not admin_user or not admin_pass:
+        return None
+    return admin_user, admin_pass
 
 
 def require_admin(
-    credentials: HTTPBasicCredentials = Depends(security),
+    credentials: HTTPBasicCredentials | None = Depends(security),
 ) -> None:
-    admin_user = os.getenv("ADMIN_USER")
-    admin_pass = os.getenv("ADMIN_PASS")
-    app_env = os.getenv("APP_ENV")
-    if not admin_user or not admin_pass:
-        if app_env == "development":
-            admin_user = DEFAULT_ADMIN_USER
-            admin_pass = DEFAULT_ADMIN_PASS
-        else:
-            raise HTTPException(
-                status_code=401,
-                detail="Unauthorized",
-                headers={"WWW-Authenticate": "Basic"},
-            )
+    stored = _get_admin_credentials()
+    if not stored:
+        return
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    admin_user, admin_pass = stored
     if not (
         secrets.compare_digest(credentials.username, admin_user)
         and secrets.compare_digest(credentials.password, admin_pass)
@@ -167,6 +169,13 @@ def render_admin_page(message: str | None = None) -> str:
     verify_token_set = "yes" if os.getenv("META_VERIFY_TOKEN") else "no"
     app_secret_set = "yes" if os.getenv("META_APP_SECRET") else "no"
     skip_signature = os.getenv("SKIP_SIGNATURE_CHECK")
+    admin_credentials = _get_admin_credentials()
+    admin_warning = ""
+    if not admin_credentials:
+        admin_warning = (
+            "<p><strong>ADMIN_USER/ADMIN_PASS not set.</strong> "
+            "Admin routes are unsecured until these env vars are configured.</p>"
+        )
     events = event_store.recent(50)
     webhook_payloads = event_store.recent_webhook_payloads(20)
     request_logs = event_store.recent_request_logs(20)
@@ -210,6 +219,7 @@ def render_admin_page(message: str | None = None) -> str:
       <p>META_VERIFY_TOKEN set: <strong>{verify_token_set}</strong></p>
       <p>META_APP_SECRET set: <strong>{app_secret_set}</strong></p>
       <p>SKIP_SIGNATURE_CHECK: <strong>{skip_signature or "not set"}</strong></p>
+      {admin_warning}
       <p>
         Render environment variables:
         <code>META_VERIFY_TOKEN</code>,
