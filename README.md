@@ -27,10 +27,14 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ## Environment variables
 ```bash
 export VERIFY_TOKEN="your-webhook-verify-token"
-export META_ACCESS_TOKEN="your-generated-graph-api-token"
+export IG_PAGE_ACCESS_TOKEN="your-page-access-token"
+export PAGE_ACCESS_TOKEN="your-page-access-token" # optional alias
+export GRAPH_TOKEN="your-generated-graph-api-token" # optional legacy name
 export APP_SECRET="your-app-secret"
 export IG_BUSINESS_ACCOUNT_ID="your-ig-business-account-id"
 export GRAPH_API_VERSION="v20.0"  # optional, defaults to v20.0
+export ADMIN_USER="admin"
+export ADMIN_PASS="change-me"
 ```
 
 Optional:
