@@ -4,10 +4,10 @@ import os
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import Base, Setting
+from app.models import Base
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///data/insta_bot.db")
 
@@ -23,8 +23,6 @@ SessionLocal = sessionmaker(
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
-    with SessionLocal() as session:
-        ensure_setting(session, "auto_reply_enabled", "true")
 
 
 @contextmanager
@@ -40,22 +38,4 @@ def get_session() -> Generator[Session, None, None]:
         session.close()
 
 
-def ensure_setting(session: Session, key: str, value: str) -> None:
-    existing = session.execute(select(Setting).where(Setting.key == key)).scalar_one_or_none()
-    if existing is None:
-        session.add(Setting(key=key, value=value))
-
-
-def get_setting(session: Session, key: str, default: str | None = None) -> str | None:
-    setting = session.execute(select(Setting).where(Setting.key == key)).scalar_one_or_none()
-    if setting is None:
-        return default
-    return setting.value
-
-
-def set_setting(session: Session, key: str, value: str) -> None:
-    setting = session.execute(select(Setting).where(Setting.key == key)).scalar_one_or_none()
-    if setting is None:
-        session.add(Setting(key=key, value=value))
-    else:
-        setting.value = value
+__all__ = ["get_session", "init_db", "SessionLocal", "engine"]
