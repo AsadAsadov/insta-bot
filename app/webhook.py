@@ -20,6 +20,9 @@ router = APIRouter()
 
 VERIFY_TOKEN_ENV = "META_VERIFY_TOKEN"
 APP_SECRET_ENV = "META_APP_SECRET"
+SKIP_SIGNATURE_ENV = "SKIP_SIGNATURE_CHECK"
+# Render env vars: set META_VERIFY_TOKEN, META_APP_SECRET, SKIP_SIGNATURE_CHECK
+# in the Render dashboard → Environment for this service.
 AUTO_REPLY_ENV = "AUTO_REPLY"
 IG_ACCESS_TOKEN_ENV = "IG_ACCESS_TOKEN"
 IG_BUSINESS_ID_ENV = "IG_BUSINESS_ID"
@@ -101,19 +104,24 @@ def set_comment_hidden(
 @router.get("/webhook")
 def verify_webhook(
     request: Request,
-) -> PlainTextResponse:
+) -> JSONResponse | PlainTextResponse:
     hub_mode = request.query_params.get("hub.mode")
     hub_verify_token = request.query_params.get("hub.verify_token")
     hub_challenge = request.query_params.get("hub.challenge")
     verify_token = os.getenv(VERIFY_TOKEN_ENV)
-    if (
-        hub_mode == "subscribe"
-        and verify_token
-        and hub_verify_token == verify_token
-        and hub_challenge
-    ):
-        return PlainTextResponse(content=hub_challenge, status_code=200)
-    return PlainTextResponse(content="Forbidden", status_code=403)
+    if hub_mode or hub_verify_token or hub_challenge:
+        if (
+            hub_mode == "subscribe"
+            and verify_token
+            and hub_verify_token == verify_token
+            and hub_challenge
+        ):
+            return PlainTextResponse(content=hub_challenge, status_code=200)
+        return PlainTextResponse(content="Forbidden", status_code=403)
+    return JSONResponse(
+        content={"status": "ok", "note": "webhook endpoint alive"},
+        status_code=200,
+    )
 
 
 @router.head("/webhook")
@@ -151,15 +159,24 @@ async def _handle_webhook(
     background_tasks: BackgroundTasks,
 ) -> JSONResponse:
     raw_body = await request.body()
-    log_request(request)
-    if verify_signature and not verify_signature_header(
-        raw_body, request.headers.get("X-Hub-Signature-256")
-    ):
-        logger.warning("invalid signature")
-        return JSONResponse(content={"ok": False}, status_code=403)
+    log_request(request, raw_body)
+    debug_mode = os.getenv(SKIP_SIGNATURE_ENV, "").lower() in {"1", "true", "yes"}
+    signature_header = request.headers.get("X-Hub-Signature-256")
+    if verify_signature and not debug_mode:
+        if not verify_signature_header(raw_body, signature_header):
+            logger.warning("invalid signature")
+            return JSONResponse(content={"ok": False}, status_code=403)
+    if debug_mode:
+        logger.info("SKIP_SIGNATURE_CHECK enabled; signature verification bypassed")
     payload = parse_json_payload(raw_body)
     logger.info("webhook payload=%s", payload)
     event_store.set_last_payload(payload)
+    event_store.add_webhook_payload(
+        {
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "payload": payload,
+        }
+    )
     background_tasks.add_task(process_and_log_payload, payload)
     return JSONResponse(content={"ok": True}, status_code=200)
 
@@ -170,21 +187,26 @@ def process_and_log_payload(payload: dict[str, Any] | None) -> None:
         process_webhook_payload(payload)
 
 
-def log_request(request: Request) -> None:
+def log_request(request: Request, raw_body: bytes) -> None:
     client_ip = request.client.host if request.client else "unknown"
     headers = dict(request.headers)
     header_subset = {
         "content-type": headers.get("content-type"),
         "user-agent": headers.get("user-agent"),
         "x-hub-signature-256": headers.get("x-hub-signature-256"),
+        "x-hub-signature": headers.get("x-hub-signature"),
     }
+    body_text = raw_body.decode("utf-8", errors="replace")
+    preview = body_text[:300]
     logger.info(
-        "webhook request method=%s path=%s client_ip=%s",
+        "webhook request method=%s path=%s client_ip=%s body_length=%s",
         request.method,
         request.url.path,
         client_ip,
+        len(raw_body),
     )
     logger.info("webhook headers=%s", header_subset)
+    logger.info("webhook body preview=%s", preview)
 
 
 def verify_signature_header(raw_body: bytes, signature_header: str | None) -> bool:
