@@ -18,44 +18,46 @@ logger = logging.getLogger("insta-bot")
 
 router = APIRouter()
 
-VERIFY_TOKEN_ENV = "VERIFY_TOKEN"
-APP_SECRET_ENV = "APP_SECRET"
+VERIFY_TOKEN_ENV = "META_VERIFY_TOKEN"
+APP_SECRET_ENV = "META_APP_SECRET"
 AUTO_REPLY_ENV = "AUTO_REPLY"
-GRAPH_TOKEN_ENV = "GRAPH_TOKEN"
-IG_PAGE_ACCESS_TOKEN_ENV = "IG_PAGE_ACCESS_TOKEN"
-PAGE_ACCESS_TOKEN_ENV = "PAGE_ACCESS_TOKEN"
-IG_BUSINESS_ACCOUNT_ENV = "IG_BUSINESS_ACCOUNT_ID"
-GRAPH_API_VERSION = os.getenv("GRAPH_API_VERSION", "v20.0")
+IG_ACCESS_TOKEN_ENV = "IG_ACCESS_TOKEN"
+IG_BUSINESS_ID_ENV = "IG_BUSINESS_ID"
+GRAPH_API_VERSION = os.getenv("GRAPH_API_VERSION", "v24.0")
 
 AUTO_REPLY_TEMPLATE = "Salam! Məlumat üçün + yazın, sizə ətraflı göndərək."
 
 
-def get_access_token() -> str | None:
-    return (
-        os.getenv(IG_PAGE_ACCESS_TOKEN_ENV)
-        or os.getenv(PAGE_ACCESS_TOKEN_ENV)
-        or os.getenv(GRAPH_TOKEN_ENV)
-    )
+def get_instagram_access_token() -> str | None:
+    return os.getenv(IG_ACCESS_TOKEN_ENV)
+
+
+def get_instagram_business_id() -> str | None:
+    return os.getenv(IG_BUSINESS_ID_ENV)
 
 
 def reply_to_comment(comment_id: str, message: str, access_token: str) -> dict[str, Any]:
     url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{comment_id}/replies"
     response = requests.post(
         url,
-        params={"message": message, "access_token": access_token},
+        params={"access_token": access_token},
+        json={"message": message},
         timeout=20,
     )
     response.raise_for_status()
     return response.json()
 
 
-def send_dm_reply(
-    recipient_id: str, message: str, access_token: str
-) -> dict[str, Any]:
-    ig_business_account_id = os.getenv(IG_BUSINESS_ACCOUNT_ENV)
-    if not ig_business_account_id:
-        raise ValueError("IG_BUSINESS_ACCOUNT_ID is not configured")
-    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_account_id}/messages"
+def send_instagram_message(recipient_id: str, message: str) -> dict[str, Any]:
+    access_token = get_instagram_access_token()
+    if not access_token:
+        raise ValueError("IG_ACCESS_TOKEN is not configured")
+    ig_business_id = get_instagram_business_id()
+    if not ig_business_id:
+        raise ValueError("IG_BUSINESS_ID is not configured")
+    url = (
+        f"https://graph.facebook.com/{GRAPH_API_VERSION}/{ig_business_id}/messages"
+    )
     response = requests.post(
         url,
         params={"access_token": access_token},
@@ -65,8 +67,22 @@ def send_dm_reply(
         },
         timeout=20,
     )
-    response.raise_for_status()
-    return response.json()
+    try:
+        response.raise_for_status()
+    except requests.RequestException:
+        logger.exception(
+            "Graph API send message failed recipient_id=%s response=%s",
+            recipient_id,
+            response.text,
+        )
+        raise
+    payload = response.json()
+    logger.info(
+        "Graph API send message response recipient_id=%s payload=%s",
+        recipient_id,
+        payload,
+    )
+    return payload
 
 
 def set_comment_hidden(
@@ -135,12 +151,14 @@ async def _handle_webhook(
     background_tasks: BackgroundTasks,
 ) -> JSONResponse:
     raw_body = await request.body()
-    log_request(request, raw_body)
+    log_request(request)
     if verify_signature and not verify_signature_header(
         raw_body, request.headers.get("X-Hub-Signature-256")
     ):
+        logger.warning("invalid signature")
         return JSONResponse(content={"ok": False}, status_code=403)
     payload = parse_json_payload(raw_body)
+    logger.info("webhook payload=%s", payload)
     event_store.set_last_payload(payload)
     background_tasks.add_task(process_and_log_payload, payload)
     return JSONResponse(content={"ok": True}, status_code=200)
@@ -152,25 +170,29 @@ def process_and_log_payload(payload: dict[str, Any] | None) -> None:
         process_webhook_payload(payload)
 
 
-def log_request(request: Request, raw_body: bytes) -> None:
+def log_request(request: Request) -> None:
     client_ip = request.client.host if request.client else "unknown"
     headers = dict(request.headers)
+    header_subset = {
+        "content-type": headers.get("content-type"),
+        "user-agent": headers.get("user-agent"),
+        "x-hub-signature-256": headers.get("x-hub-signature-256"),
+    }
     logger.info(
         "webhook request method=%s path=%s client_ip=%s",
         request.method,
         request.url.path,
         client_ip,
     )
-    logger.info("webhook headers=%s", headers)
-    logger.info(
-        "webhook raw_body=%s", raw_body.decode("utf-8", errors="replace")
-    )
+    logger.info("webhook headers=%s", header_subset)
 
 
 def verify_signature_header(raw_body: bytes, signature_header: str | None) -> bool:
     app_secret = os.getenv(APP_SECRET_ENV)
     if not app_secret:
-        logger.info("APP_SECRET not configured; skipping signature verification")
+        logger.warning(
+            "META_APP_SECRET not configured; skipping signature verification"
+        )
         return True
     if not signature_header or not signature_header.startswith("sha256="):
         logger.warning("Missing or invalid signature header")
@@ -242,6 +264,27 @@ def handle_comment_change(value: dict[str, Any]) -> None:
     sender_id = (value.get("from") or {}).get("id")
     timestamp = value.get("timestamp")
     thread_id = sender_id or comment_id
+    is_edit = bool(value.get("is_edited")) or value.get("verb") == "edited"
+    if is_edit and comment_id:
+        original_event = event_store.get_comment(comment_id)
+        original_text = original_event.get("text") if original_event else None
+        edited_event = {
+            "event_type": "comment_edit",
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "thread_id": thread_id,
+            "comment_id": comment_id,
+            "media_id": media_id,
+            "original_text": original_text,
+            "edited_text": text,
+            "preview": text or original_text,
+            "from_id": sender_id,
+            "timestamp": timestamp,
+        }
+        event_store.add_event(edited_event)
+        if comment_id:
+            event_store.register_comment(comment_id, edited_event)
+        logger.info("Stored comment edit event: %s", edited_event)
+        return
     event = {
         "event_type": "comment",
         "received_at": datetime.now(timezone.utc).isoformat(),
@@ -254,9 +297,11 @@ def handle_comment_change(value: dict[str, Any]) -> None:
         "timestamp": timestamp,
     }
     event_store.add_event(event)
+    if comment_id:
+        event_store.register_comment(comment_id, event)
     logger.info("Stored comment event: %s", event)
     if os.getenv(AUTO_REPLY_ENV) == "1" and comment_id:
-        access_token = get_access_token()
+        access_token = get_instagram_access_token()
         if not access_token:
             logger.warning("AUTO_REPLY enabled but no access token configured")
             return
