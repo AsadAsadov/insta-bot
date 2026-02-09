@@ -72,6 +72,16 @@ def root() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.head("/health")
+def health_head() -> Response:
+    return Response(status_code=200)
+
+
 @app.get("/debug/health")
 def debug_health() -> dict[str, bool | str]:
     return {"status": "ok", "webhook_get": True, "webhook_post": True}

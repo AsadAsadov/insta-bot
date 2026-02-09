@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -107,19 +106,14 @@ def verify_webhook(request: Request):
     hub_verify_token = request.query_params.get("hub.verify_token")
     hub_challenge = request.query_params.get("hub.challenge")
     verify_token = os.getenv(VERIFY_TOKEN_ENV)
-    if hub_mode or hub_verify_token or hub_challenge:
-        if (
-            hub_mode == "subscribe"
-            and verify_token
-            and hub_verify_token == verify_token
-            and hub_challenge
-        ):
-            return PlainTextResponse(content=hub_challenge, status_code=200)
-        return PlainTextResponse(content="Forbidden", status_code=403)
-    return JSONResponse(
-        content={"status": "ok", "note": "webhook endpoint alive"},
-        status_code=200,
-    )
+    if (
+        hub_mode == "subscribe"
+        and verify_token
+        and hub_verify_token == verify_token
+        and hub_challenge
+    ):
+        return PlainTextResponse(content=hub_challenge, status_code=200)
+    return PlainTextResponse(content="Forbidden", status_code=403)
 
 
 @router.head("/webhook")
@@ -162,9 +156,11 @@ async def _handle_webhook(
         debug_mode = (
             os.getenv(SKIP_SIGNATURE_ENV, "").lower() in {"1", "true", "yes"}
         )
-        signature_header = request.headers.get("X-Hub-Signature-256")
+        signature_header = request.headers.get("x-hub-signature-256")
         if verify_signature and not debug_mode:
-            if not verify_signature_header(raw_body, signature_header):
+            if signature_header and not verify_signature_header(
+                raw_body, signature_header
+            ):
                 logger.warning("invalid signature")
                 return JSONResponse(
                     content={"ok": False, "error": "invalid_signature"},
@@ -174,7 +170,7 @@ async def _handle_webhook(
             logger.info(
                 "SKIP_SIGNATURE_CHECK enabled; signature verification bypassed"
             )
-        payload = parse_json_payload(raw_body)
+        payload = await parse_json_payload(request)
         logger.info("webhook payload=%s", payload)
         event_store.set_last_payload(payload)
         event_store.add_webhook_payload(
@@ -209,7 +205,7 @@ def log_request(request: Request, raw_body: bytes) -> None:
         client_ip = forwarded_for.split(",")[0].strip() or client_ip
     headers = dict(request.headers)
     body_text = raw_body.decode("utf-8", errors="replace")
-    preview = body_text[:500]
+    preview = body_text[:2048]
     logger.info(
         "webhook request method=%s path=%s client_ip=%s body_length=%s",
         request.method,
@@ -241,12 +237,10 @@ def verify_signature_header(raw_body: bytes, signature_header: str | None) -> bo
     return True
 
 
-def parse_json_payload(raw_body: bytes) -> dict[str, Any] | None:
-    if not raw_body:
-        return None
+async def parse_json_payload(request: Request) -> dict[str, Any] | None:
     try:
-        payload = json.loads(raw_body.decode("utf-8"))
-    except json.JSONDecodeError:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
         logger.exception("Failed to decode webhook payload")
         return None
     if not isinstance(payload, dict):
