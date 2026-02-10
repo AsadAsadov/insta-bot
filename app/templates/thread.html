@@ -1,77 +1,63 @@
 {% extends "base.html" %}
-{% block title %}Thread{% endblock %}
+{% block title %}Thread {{ selected_thread }} · InstaFlow{% endblock %}
 {% block content %}
-<div class="row g-4">
-  <div class="col-lg-4">
-    <div class="card shadow-sm">
-      <div class="card-header fw-semibold">Threads</div>
-      <div class="card-body">
-        <div class="list-group">
-          {% for thread in threads %}
-          <a href="/admin/thread/{{ thread.id }}" class="list-group-item list-group-item-action {% if active_thread == thread.id %}active{% endif %}">
-            <div class="fw-semibold">{{ thread.id }}</div>
-            <small class="text-muted">{{ thread.last_message }}</small>
-          </a>
-          {% endfor %}
-        </div>
+<div class="row g-3">
+  <section class="col-12 col-xl-4">
+    <div class="card shadow-sm h-100">
+      <div class="card-header bg-white">
+        <input id="thread-search" class="form-control" type="search" placeholder="Search threads..." />
+      </div>
+      <div class="list-group list-group-flush thread-list" id="thread-list">
+        {% for t in threads %}
+        <a class="list-group-item list-group-item-action thread-item {% if selected_thread == t.id %}active{% endif %}" href="/admin/thread/{{ t.id }}" data-thread-id="{{ t.id }}">
+          <div class="fw-semibold">{{ t.id }}</div>
+          <small class="{% if selected_thread == t.id %}text-white-50{% else %}text-body-secondary{% endif %}">{{ t.last_message or "No messages yet" }}</small>
+        </a>
+        {% endfor %}
       </div>
     </div>
-  </div>
-  <div class="col-lg-8">
+  </section>
+
+  <section class="col-12 col-xl-8">
+    {% if last_outbox and last_outbox.status == 'failed' %}
+    <div class="alert alert-danger">Last send failed: {{ last_outbox.error or 'Unknown error' }}</div>
+    {% endif %}
+
     <div class="card shadow-sm mb-3">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <span class="fw-semibold">Conversation · {{ active_thread }}</span>
-        <a href="/admin/templates" class="btn btn-sm btn-outline-primary">Templates</a>
-      </div>
-      <div class="card-body thread-events">
+      <div class="card-header bg-white fw-semibold">Thread {{ selected_thread }}</div>
+      <div class="card-body chat-body">
         {% for event in events %}
-        <div class="mb-2">
-          <span class="badge text-bg-{% if event.event_type in ['message_out', 'comment_public_reply', 'dm_out_private_reply'] %}success{% else %}secondary{% endif %}">{{ event.event_type }}</span>
-          <div>{{ event.text }}</div>
-          <small class="text-muted">{{ event.received_at }}</small>
+        <div class="d-flex mb-3 {% if event.event_type == 'message_out' %}justify-content-end{% else %}justify-content-start{% endif %}">
+          <div class="bubble {% if event.event_type == 'message_out' %}bubble-out{% else %}bubble-in{% endif %}">
+            <div>{{ event.text or '' }}</div>
+            <div class="small text-body-secondary mt-1">{{ event.received_at }}</div>
+          </div>
         </div>
         {% else %}
-        <div class="text-muted">No events yet.</div>
+        <p class="text-body-secondary mb-0">No messages in this thread yet.</p>
         {% endfor %}
       </div>
     </div>
 
     <div class="card shadow-sm">
-      <div class="card-header fw-semibold">Send DM reply</div>
       <div class="card-body">
-        {% if latest_failed %}
-        <div class="alert alert-danger">Latest failed send: {{ latest_failed.error }}</div>
-        {% endif %}
-        <form method="post" action="/admin/message-reply">
-          <input type="hidden" name="thread_id" value="{{ active_thread }}" />
-          <div class="mb-3">
-            <label class="form-label">Quick template</label>
-            <select class="form-select" id="quickReply">
-              <option value="">Select</option>
-              {% for template in templates %}
-              <option value="{{ template.reply_text }}">{{ template.name }}</option>
-              {% endfor %}
-            </select>
+        <form method="post" action="/admin/message-reply" class="vstack gap-2">
+          <input type="hidden" name="thread_id" value="{{ selected_thread }}" />
+          <label class="form-label mb-0" for="quick-reply">Quick reply</label>
+          <select class="form-select" id="quick-reply">
+            <option value="">Select a template reply...</option>
+            {% for qr in quick_replies %}
+            <option value="{{ qr }}">{{ qr }}</option>
+            {% endfor %}
+          </select>
+          <label class="form-label mb-0" for="text">Message</label>
+          <textarea id="reply-text" class="form-control" name="text" rows="4" placeholder="Write your reply..."></textarea>
+          <div>
+            <button class="btn btn-primary" type="submit">Send</button>
           </div>
-          <div class="mb-3">
-            <label class="form-label">Message</label>
-            <textarea class="form-control" name="message_text" id="messageText" rows="4" required></textarea>
-          </div>
-          <button class="btn btn-primary" type="submit">Send reply</button>
         </form>
       </div>
     </div>
-  </div>
+  </section>
 </div>
-{% endblock %}
-{% block scripts %}
-<script>
-  const quickReply = document.getElementById("quickReply");
-  const messageText = document.getElementById("messageText");
-  if (quickReply && messageText) {
-    quickReply.addEventListener("change", (event) => {
-      if (event.target.value) messageText.value = event.target.value;
-    });
-  }
-</script>
 {% endblock %}
