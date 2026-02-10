@@ -1,34 +1,30 @@
 {% extends "base.html" %}
-
-{% block title %}Admin Inbox{% endblock %}
-
+{% block title %}Inbox{% endblock %}
 {% block content %}
 <div class="row g-4">
-  <div class="col-12 col-lg-4">
+  <div class="col-lg-3">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">Navigation</div>
+      <div class="list-group list-group-flush">
+        <a class="list-group-item list-group-item-action" href="/admin">Inbox</a>
+        <a class="list-group-item list-group-item-action" href="/admin/templates">DM Templates</a>
+        <a class="list-group-item list-group-item-action" href="/admin/triggers">Comment Triggers</a>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-9">
     <div class="card shadow-sm">
       <div class="card-body">
-        <div class="d-flex align-items-center justify-content-between mb-3">
-          <h5 class="mb-0">Threads</h5>
-          <span class="badge rounded-pill text-bg-primary">{{ threads | length }}</span>
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0">Inbox threads</h5>
+          <span class="badge text-bg-secondary">{{ threads | length }}</span>
         </div>
-        <input
-          id="threadSearch"
-          class="form-control mb-3"
-          placeholder="Search threads..."
-          type="text"
-        />
+        <input class="form-control mb-3" id="threadSearch" placeholder="Search thread id or message" />
         <div class="list-group" id="threadList">
           {% for thread in threads %}
-          <a
-            href="/admin/thread/{{ thread.id }}"
-            class="list-group-item list-group-item-action d-flex justify-content-between align-items-start thread-item"
-            data-thread-id="{{ thread.id }}"
-          >
-            <div class="me-auto">
-              <div class="fw-semibold">{{ thread.id }}</div>
-              <small class="text-muted">{{ thread.last_message or "No messages yet" }}</small>
-            </div>
-            <span class="badge badge-soft">{{ thread.last_ts }}</span>
+          <a href="/admin/thread/{{ thread.id }}" class="list-group-item list-group-item-action thread-row">
+            <div class="fw-semibold">{{ thread.id }}</div>
+            <small class="text-muted">{{ thread.last_message }}</small>
           </a>
           {% else %}
           <div class="text-muted">No threads yet.</div>
@@ -37,31 +33,17 @@
       </div>
     </div>
   </div>
-  <div class="col-12 col-lg-8">
-    <div class="card shadow-sm h-100">
-      <div class="card-body d-flex flex-column justify-content-center text-center">
-        <h4 class="fw-semibold">Select a thread</h4>
-        <p class="text-muted">Choose a conversation to view messages and reply.</p>
-        <div class="d-flex justify-content-center gap-2">
-          <a class="btn btn-primary" href="/admin/templates">Manage Templates</a>
-          <a class="btn btn-outline-secondary" href="/admin">Refresh</a>
-        </div>
-      </div>
-    </div>
-  </div>
 </div>
 {% endblock %}
-
 {% block scripts %}
 <script>
-  const searchInput = document.getElementById("threadSearch");
-  const list = document.getElementById("threadList");
-  if (searchInput && list) {
-    searchInput.addEventListener("input", (event) => {
-      const query = event.target.value.toLowerCase();
-      list.querySelectorAll(".thread-item").forEach((item) => {
-        const text = item.dataset.threadId.toLowerCase();
-        item.style.display = text.includes(query) ? "flex" : "none";
+  const threadSearch = document.getElementById("threadSearch");
+  const threadList = document.getElementById("threadList");
+  if (threadSearch && threadList) {
+    threadSearch.addEventListener("input", (event) => {
+      const q = event.target.value.toLowerCase();
+      threadList.querySelectorAll(".thread-row").forEach((row) => {
+        row.style.display = row.textContent.toLowerCase().includes(q) ? "block" : "none";
       });
     });
   }

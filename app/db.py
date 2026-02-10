@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -70,6 +71,19 @@ def init_db() -> None:
                 error TEXT,
                 created_at TEXT,
                 sent_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS comment_triggers (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT,
+              trigger_type TEXT,
+              trigger_value TEXT,
+              public_reply_text TEXT,
+              dm_reply_text TEXT,
+              is_active INTEGER DEFAULT 1
             )
             """
         )
@@ -262,8 +276,6 @@ def find_matching_template(text: str | None) -> sqlite3.Row | None:
             return template
         if trigger_type == "regex" and trigger_value:
             try:
-                import re
-
                 if re.search(trigger_value, text):
                     return template
             except re.error:
@@ -271,7 +283,90 @@ def find_matching_template(text: str | None) -> sqlite3.Row | None:
     return None
 
 
-def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+def list_comment_triggers() -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT id, name, trigger_type, trigger_value, public_reply_text, dm_reply_text, is_active
+            FROM comment_triggers
+            ORDER BY id ASC
+            """
+        )
+        return cursor.fetchall()
+
+
+def create_comment_trigger(
+    name: str,
+    trigger_type: str,
+    trigger_value: str,
+    public_reply_text: str,
+    dm_reply_text: str,
+    is_active: int,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO comment_triggers (
+                name, trigger_type, trigger_value, public_reply_text, dm_reply_text, is_active
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (name, trigger_type, trigger_value, public_reply_text, dm_reply_text, is_active),
+        )
+
+
+def toggle_comment_trigger(trigger_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE comment_triggers
+            SET is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END
+            WHERE id = ?
+            """,
+            (trigger_id,),
+        )
+
+
+def delete_comment_trigger(trigger_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM comment_triggers WHERE id = ?", (trigger_id,))
+
+
+def find_matching_comment_trigger(text: str | None) -> sqlite3.Row | None:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT id, name, trigger_type, trigger_value, public_reply_text, dm_reply_text, is_active
+            FROM comment_triggers
+            WHERE is_active = 1
+            ORDER BY id ASC
+            """
+        )
+        triggers = cursor.fetchall()
+
+    for trigger in triggers:
+        trigger_type = trigger["trigger_type"]
+        trigger_value = (trigger["trigger_value"] or "").strip()
+        if trigger_type == "any":
+            return trigger
+        if text is None:
+            continue
+        if trigger_type == "equals" and text == trigger_value:
+            return trigger
+        if trigger_type == "contains" and trigger_value and trigger_value in text:
+            return trigger
+        if trigger_type == "regex" and trigger_value:
+            try:
+                if re.search(trigger_value, text):
+                    return trigger
+            except re.error:
+                continue
+    return None
+
+
+def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
     return dict(row)
 
 
@@ -291,5 +386,11 @@ __all__ = [
     "toggle_template",
     "delete_template",
     "find_matching_template",
+    "list_comment_triggers",
+    "create_comment_trigger",
+    "toggle_comment_trigger",
+    "delete_comment_trigger",
+    "find_matching_comment_trigger",
     "row_to_dict",
+    "utc_now_iso",
 ]
