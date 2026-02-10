@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Posts · InstaFlow{% endblock %}
+{% block content %}
+<div class="card shadow-sm">
+  <div class="card-body">
+    <h5>Instagram Posts (OAuth)</h5>
+    {% if not oauth_enabled %}
+    <p class="text-body-secondary mb-2">OAuth feature is disabled (META_OAUTH_ENABLED=0).</p>
+    <p class="mb-0">To enable in the future, implement OAuth login/callback and request app-reviewed permissions: <code>instagram_basic</code>, <code>pages_show_list</code>, <code>instagram_manage_comments</code>, and <code>instagram_manage_messages</code>.</p>
+    {% else %}
+    <p class="text-body-secondary mb-0">OAuth flag is on, but this page is still a Phase 2 placeholder.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
