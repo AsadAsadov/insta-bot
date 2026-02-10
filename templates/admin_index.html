@@ -1,56 +1,51 @@
 {% extends "base.html" %}
-{% block title %}Inbox · InstaBot{% endblock %}
+{% block title %}Inbox{% endblock %}
 {% block content %}
 <div class="row g-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-body">
-                <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
-                    <div>
-                        <h4 class="mb-1">Inbox</h4>
-                        <p class="text-muted mb-0">Recent Instagram DM threads</p>
-                    </div>
-                    <div class="w-100 w-md-auto">
-                        <input class="form-control search-input" id="threadSearch" placeholder="Search by thread ID or message" />
-                    </div>
-                </div>
-            </div>
-        </div>
+  <div class="col-lg-3">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">Navigation</div>
+      <div class="list-group list-group-flush">
+        <a class="list-group-item list-group-item-action" href="/admin">Inbox</a>
+        <a class="list-group-item list-group-item-action" href="/admin/templates">DM Templates</a>
+        <a class="list-group-item list-group-item-action" href="/admin/triggers">Comment Triggers</a>
+      </div>
     </div>
-    <div class="col-12">
-        <div class="card">
-            <div class="list-group list-group-flush" id="threadList">
-                {% if threads %}
-                    {% for thread in threads %}
-                    <a href="/admin/thread/{{ thread.id }}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-start">
-                        <div>
-                            <div class="fw-semibold">{{ thread.id }}</div>
-                            <div class="text-muted small">{{ thread.last_message }}</div>
-                        </div>
-                        <span class="badge rounded-pill bg-primary">{{ thread.last_ts }}</span>
-                    </a>
-                    {% endfor %}
-                {% else %}
-                    <div class="p-4 text-center text-muted">No threads yet. Incoming DMs will appear here.</div>
-                {% endif %}
-            </div>
+  </div>
+  <div class="col-lg-9">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0">Inbox threads</h5>
+          <span class="badge text-bg-secondary">{{ threads | length }}</span>
         </div>
+        <input class="form-control mb-3" id="threadSearch" placeholder="Search thread id or message" />
+        <div class="list-group" id="threadList">
+          {% for thread in threads %}
+          <a href="/admin/thread/{{ thread.id }}" class="list-group-item list-group-item-action thread-row">
+            <div class="fw-semibold">{{ thread.id }}</div>
+            <small class="text-muted">{{ thread.last_message }}</small>
+          </a>
+          {% else %}
+          <div class="text-muted">No threads yet.</div>
+          {% endfor %}
+        </div>
+      </div>
     </div>
+  </div>
 </div>
 {% endblock %}
 {% block scripts %}
 <script>
-    const threadSearch = document.getElementById('threadSearch');
-    const threadList = document.getElementById('threadList');
-    if (threadSearch && threadList) {
-        threadSearch.addEventListener('input', (event) => {
-            const term = event.target.value.toLowerCase();
-            const items = threadList.querySelectorAll('.list-group-item');
-            items.forEach((item) => {
-                const text = item.textContent.toLowerCase();
-                item.style.display = text.includes(term) ? '' : 'none';
-            });
-        });
-    }
+  const threadSearch = document.getElementById("threadSearch");
+  const threadList = document.getElementById("threadList");
+  if (threadSearch && threadList) {
+    threadSearch.addEventListener("input", (event) => {
+      const q = event.target.value.toLowerCase();
+      threadList.querySelectorAll(".thread-row").forEach((row) => {
+        row.style.display = row.textContent.toLowerCase().includes(q) ? "block" : "none";
+      });
+    });
+  }
 </script>
 {% endblock %}
